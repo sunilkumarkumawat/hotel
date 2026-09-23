@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -17,25 +18,21 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: ${{ secrets.VPS_PORT }}
           script: |
-            # Project directory
+            echo "Starting deployment on server..."
             cd ${{ secrets.VPS_PROJECT_PATH || '/var/www/hotel' }}
-
-            # Latest master branch pull
+            
             git pull origin master
-
-            # Dependencies
+            
             composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
-
-            # Database migrations
+            
             php artisan migrate --force
-
-            # Cache clear & optimizations
+            
             php artisan optimize:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
-
-            # Permissions
+            
             chmod -R 775 storage bootstrap/cache
+            echo "Deployment finished successfully!"
