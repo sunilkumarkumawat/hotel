@@ -1,0 +1,287 @@
+/*
+|------------------------------------------------------------------------------
+| Issue House Keeping — the laundry grid
+|------------------------------------------------------------------------------
+| Adds and removes lines, fills the rates from the item that was picked, fills
+| the Prev Qty column from whatever the chosen vendor is still holding, and
+| keeps Amount and the totals row moving as the clerk types.
+|
+| Every figure here is worked out again on the server before anything is saved
+| (see App\Http\Controllers\HkIssueController::cleanLines), so this file is a
+| convenience, not the rule. The lines themselves are rendered by the server,
+| so with this file missing the note can still be written — there is simply
+| one line, no "+" to add another, and nothing adds itself up until you save.
+*/
+
+(function () {
+    'use strict';
+
+    /* ── The two quick-add popups ───────────────────────────────────────── */
+
+    var all = function (sel, root) {
+        return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+    };
+
+    function closeModal(modal) {
+        modal.classList.remove('is-open');
+        document.body.style.overflow = '';
+    }
+
+    all('[data-open]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var modal = document.querySelector('[data-modal="' + button.getAttribute('data-open') + '"]');
+
+            if (!modal) return;
+
+            modal.classList.add('is-open');
+            document.body.style.overflow = 'hidden';
+
+            var first = modal.querySelector('input:not([type=hidden]), select');
+
+            if (first) first.focus();
+        });
+    });
+
+    all('[data-modal]').forEach(function (modal) {
+        all('[data-modal-close]', modal).forEach(function (b) {
+            b.addEventListener('click', function () { closeModal(modal); });
+        });
+
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) closeModal(modal);
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') all('[data-modal].is-open').forEach(closeModal);
+    });
+
+    /* ── The grid ───────────────────────────────────────────────────────── */
+
+    var boot = window.LAUNDRY || {};
+
+    var form = document.querySelector('[data-issue]');
+    var body = document.querySelector('[data-issue-rows]');
+    var template = document.querySelector('[data-issue-template]');
+    var vendor = document.querySelector('[data-issue-vendor]');
+
+    if (!form || !body || !template) return;
+
+    /* What the vendor is already holding, keyed by item id. */
+    var pending = {};
+    var index = 0;
+
+    var money = function (n) {
+        return '₹' + (Math.round(n * 100) / 100).toFixed(2);
+    };
+
+    var num = function (el) {
+        var v = parseFloat(el && el.value);
+
+        return isFinite(v) && v > 0 ? v : 0;
+    };
+
+    var cell = function (row, name) {
+        return row.querySelector('[data-cell="' + name + '"]');
+    };
+
+    /* ── One line ───────────────────────────────────────────────────────── */
+
+    function addRow() {
+        var row = template.content.firstElementChild.cloneNode(true);
+
+        // The template's fields carry no name, so nothing inside it is ever
+        // submitted. A clone gets its own index here. Holes in the numbering
+        // are fine — PHP reads lines[] as a map, not a list.
+        Array.prototype.slice.call(row.querySelectorAll('[data-cell]')).forEach(function (field) {
+            var name = field.getAttribute('data-cell');
+
+            // prev_qty and amount are worked out, not entered; posting them
+            // would only invite somebody to post a different figure.
+            if (name === 'prev_qty' || name === 'amount') return;
+
+            field.name = 'lines[' + index + '][' + name + ']';
+        });
+
+        index += 1;
+        body.appendChild(row);
+
+        bind(row);
+        syncRow(row);
+
+        return row;
+    }
+
+    function bind(row) {
+        var item = cell(row, 'hk_item_id');
+
+        if (item) {
+            item.addEventListener('change', function () {
+                var option = item.options[item.selectedIndex];
+
+                // Only fill the rates in when they have not been typed over —
+                // a rate the clerk entered by hand is a decision, not a default.
+                var std = cell(row, 'std_rate');
+                var exp = cell(row, 'exp_rate');
+
+                if (option && option.value) {
+                    if (!row.dataset.rateTouched) {
+                        if (std) std.value = option.getAttribute('data-std') || 0;
+                        if (exp) exp.value = option.getAttribute('data-exp') || 0;
+                    }
+                }
+
+                syncRow(row);
+                syncTotals();
+            });
+        }
+
+        ['std_rate', 'exp_rate'].forEach(function (name) {
+            var field = cell(row, name);
+
+            if (field) {
+                field.addEventListener('input', function () {
+                    row.dataset.rateTouched = '1';
+                });
+            }
+        });
+
+        ['std_qty', 'exp_qty', 'rewash_qty', 'std_rate', 'exp_rate'].forEach(function (name) {
+            var field = cell(row, name);
+
+            if (field) field.addEventListener('input', function () { syncRow(row); syncTotals(); });
+        });
+
+        var remove = row.querySelector('[data-row-remove]');
+        var add = row.querySelector('[data-row-add]');
+
+        if (remove) {
+            remove.addEventListener('click', function () {
+                // Never leave the grid with nothing in it.
+                if (body.children.length === 1) {
+                    Array.prototype.slice.call(row.querySelectorAll('[data-cell]')).forEach(function (field) {
+                        field.value = field.tagName === 'SELECT' ? '' : '0';
+                    });
+
+                    delete row.dataset.rateTouched;
+                    syncRow(row);
+                } else {
+                    row.remove();
+                }
+
+                syncTotals();
+            });
+        }
+
+        if (add) {
+            add.addEventListener('click', function () {
+                var next = addRow();
+                var first = next.querySelector('select');
+
+                if (first) first.focus();
+            });
+        }
+    }
+
+    /** Prev Qty and Amount for one line. */
+    function syncRow(row) {
+        var item = cell(row, 'hk_item_id');
+        var prev = cell(row, 'prev_qty');
+        var amount = cell(row, 'amount');
+
+        if (prev) {
+            var id = item && item.value;
+
+            prev.value = id && pending[id] ? pending[id] : 0;
+        }
+
+        if (amount) {
+            amount.value = (
+                num(cell(row, 'std_qty')) * num(cell(row, 'std_rate'))
+                + num(cell(row, 'exp_qty')) * num(cell(row, 'exp_rate'))
+            ).toFixed(2);
+        }
+    }
+
+    function syncTotals() {
+        var rows = Array.prototype.slice.call(body.children);
+
+        ['std_qty', 'exp_qty', 'rewash_qty'].forEach(function (name) {
+            var box = document.querySelector('[data-total="' + name + '"]');
+
+            if (!box) return;
+
+            box.textContent = String(rows.reduce(function (sum, row) {
+                return sum + num(cell(row, name));
+            }, 0));
+        });
+
+        var total = document.querySelector('[data-total="amount"]');
+
+        if (total) {
+            total.textContent = money(rows.reduce(function (sum, row) {
+                var field = cell(row, 'amount');
+                var value = parseFloat(field && field.value);
+
+                return sum + (isFinite(value) ? value : 0);
+            }, 0));
+        }
+    }
+
+    /* ── Prev Qty comes from the vendor ─────────────────────────────────── */
+
+    function loadPending() {
+        var id = vendor && vendor.value;
+
+        if (!id || !boot.pendingUrl) {
+            pending = {};
+            Array.prototype.slice.call(body.children).forEach(syncRow);
+
+            return;
+        }
+
+        fetch(boot.pendingUrl + '?vendor=' + encodeURIComponent(id), {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        })
+            .then(function (response) { return response.ok ? response.json() : { pending: {} }; })
+            .then(function (data) {
+                pending = data.pending || {};
+                Array.prototype.slice.call(body.children).forEach(syncRow);
+            })
+            .catch(function () {
+                // The column is a courtesy; a failed lookup must not stop the
+                // clerk writing the note.
+                pending = {};
+            });
+    }
+
+    if (vendor) vendor.addEventListener('change', loadPending);
+
+    /* ── Start ──────────────────────────────────────────────────────────── */
+
+    /*
+     * The server has already rendered the lines — one empty one, or whatever a
+     * failed save brought back. Take them over rather than redrawing, or the
+     * clerk's own typing would be thrown away, and carry on numbering from
+     * where they stop.
+     */
+    Array.prototype.slice.call(body.children).forEach(function (row) {
+        var item = cell(row, 'hk_item_id');
+        var match = item && item.name && item.name.match(/lines\[(\d+)\]/);
+
+        if (match) index = Math.max(index, parseInt(match[1], 10) + 1);
+
+        // A rate the clerk typed is a decision; picking an item must not
+        // overwrite it on a form that has come back from a failed save.
+        if (num(cell(row, 'std_rate')) > 0 || num(cell(row, 'exp_rate')) > 0) {
+            row.dataset.rateTouched = '1';
+        }
+
+        bind(row);
+    });
+
+    if (!body.children.length) addRow();
+
+    loadPending();
+    syncTotals();
+})();

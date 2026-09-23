@@ -1,0 +1,158 @@
+APP_NAME="Hotel Admin"
+APP_ENV=local
+APP_KEY=base64:iRLM4LisP2QEczt40Da7GX4Y+1IH+MBwhV9TKwUDHdM=
+APP_DEBUG=true
+APP_TIMEZONE=Asia/Kolkata
+APP_URL=http://localhost:8000
+
+APP_LOCALE=en
+APP_FALLBACK_LOCALE=en
+APP_FAKER_LOCALE=en_US
+
+LOG_CHANNEL=stack
+LOG_LEVEL=debug
+
+# XAMPP / MySQL — create the database first (phpMyAdmin > New > hotel_admin)
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=hotel_admin
+DB_USERNAME=root
+DB_PASSWORD=
+
+SESSION_DRIVER=file
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+SESSION_DOMAIN=null
+
+BROADCAST_CONNECTION=log
+FILESYSTEM_DISK=local
+QUEUE_CONNECTION=database
+
+CACHE_STORE=file
+
+# ── Email ──────────────────────────────────────────────────────────────────
+# Leave MAIL_MAILER=log and every notification is written to
+# storage/logs/laravel.log instead of being sent.
+#
+# There are TWO ways to send for real, and the only difference between them is
+# which password the mail server will accept.
+#
+# 1) GMAIL. Gmail refuses the password you sign in to Gmail with. Over SMTP it
+#    only accepts a 16-character App Password — that is GOOGLE'S rule, not this
+#    system's, and nothing in this project checks a password length. To get one:
+#    Google account -> turn on 2-Step Verification (App passwords do not appear
+#    until you do) -> Security -> App passwords -> Mail. Put the 16 characters
+#    below with no spaces and no quotes.
+#
+#      MAIL_HOST=smtp.gmail.com
+#      MAIL_USERNAME=you@gmail.com
+#
+# 2) YOUR OWN DOMAIN, from whoever hosts the website. Here YOU choose the
+#    password, any length you like, and guests get mail from the hotel's own
+#    address instead of from a Gmail account. The exact server name is in your
+#    host's control panel (cPanel -> Email Accounts).
+#
+#      MAIL_HOST=mail.yourhotel.com
+#      MAIL_USERNAME=info@yourhotel.com
+#
+# Some hosts want MAIL_PORT=465 with MAIL_ENCRYPTION=ssl instead of 587/tls.
+# Administration -> Notification Settings has a "Check the mail server" button
+# that connects and logs in WITHOUT sending anything, and tells you in one
+# sentence which part the server was unhappy about.
+#
+# After editing this file run once:  php artisan config:clear
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.gmail.com
+MAIL_PORT=587
+MAIL_ENCRYPTION=tls
+MAIL_USERNAME=biltykumawat341@gmail.com
+MAIL_PASSWORD=shyambilty@@3341
+MAIL_FROM_ADDRESS=biltykumawat341@gmail.com
+MAIL_FROM_NAME="${APP_NAME}"
+
+# ── WhatsApp ───────────────────────────────────────────────────────────────
+# The gateway is int.chatway.in and the username is already set. PASTE THE
+# TOKEN on the WHATSAPP_TOKEN line below and WhatsApp starts working — booking
+# confirmations, check-in, bills, pickups, the lot.
+#
+# It is deliberately left empty here rather than committed: a token written
+# into a file is a token in every backup and every copy of this project anybody
+# is ever sent.
+#
+# AFTER EDITING THIS FILE, RUN ONCE:  php artisan config:clear
+# Laravel caches this file. Until that command is run the old values are still
+# what the application sees, which is why a token that "has been filled in"
+# can still send nothing.
+#
+# To check what the running application actually has, without guessing:
+#     php artisan whatsapp:test
+# and to send one real message and see the gateway's own reply:
+#     php artisan whatsapp:test 9876543210
+# The same table is on the screen at Administration -> Notification Settings.
+#
+# WHATSAPP_DRIVER=log turns sending off on purpose: messages are written to
+# storage/logs/laravel.log instead. Anything else with its keys missing is
+# treated as a fault and says so, rather than quietly logging and looking like
+# it worked.
+WHATSAPP_DRIVER=chatway
+WHATSAPP_USERNAME=sales@rukmanisoftware.com
+WHATSAPP_TOKEN=SzlVM3ltYzFCaGU3RHZNQ1Y5Y2JNUT09
+WHATSAPP_CHATWAY_URL=https://int.chatway.in/api/send-msg
+WHATSAPP_COUNTRY_CODE=91
+
+# Other providers, if you ever move off Chatway — see config/services.php.
+#   WHATSAPP_DRIVER=meta      + WHATSAPP_PHONE_ID + WHATSAPP_TOKEN
+#   WHATSAPP_DRIVER=twilio    + WHATSAPP_TWILIO_SID + WHATSAPP_TWILIO_TOKEN + WHATSAPP_FROM
+#   WHATSAPP_DRIVER=gateway   + WHATSAPP_URL + WHATSAPP_TOKEN
+WHATSAPP_PHONE_ID=
+WHATSAPP_URL=
+WHATSAPP_FROM=
+WHATSAPP_TWILIO_SID=
+WHATSAPP_TWILIO_TOKEN=
+
+# ── The PDF that goes with a guest's WhatsApp message ──────────────────────
+# Booking confirmation, registration slip, final bill — the guest gets the
+# message AND a proper document to keep. What each one says is
+# config/guest-documents.php.
+#
+# IT ONLY WORKS ON A PUBLIC ADDRESS. WhatsApp does not receive the file, it
+# receives a link and goes and fetches it, so while APP_URL is
+# http://127.0.0.1:8000 there is nothing for it to fetch and the message is
+# sent on its own. Administration -> Notification Settings says so on screen.
+# Put the hotel's real web address on the APP_URL line above and attachments
+# start working with nothing else changed.
+PMS_GUEST_PDF=true
+
+# The PDF goes out on BOTH channels, and only one of them needs an address:
+#
+#   Email     carries the file itself. Works from a laptop, works from a
+#             server, needs nothing set here.
+#   WhatsApp  is handed a LINK and fetches the file itself, so it needs an
+#             address the internet can reach.
+#
+# On a real server APP_URL above is that address and this line stays empty.
+# On a laptop, point a tunnel (ngrok, cloudflared) at this application and put
+# its address here — WhatsApp attachments then work without moving the whole
+# application off 127.0.0.1.
+PMS_PUBLIC_URL=
+PMS_GUEST_DOC_DAYS=30
+
+
+# LIVE:
+ PMS_PUBLIC_URL=https://randy-sculpture-affects-relevance.trycloudflare.com
+
+# ── Tax ────────────────────────────────────────────────────────────────────
+# 'none' means every Tax dropdown in the system opens on "No Tax" and a row
+# nobody touches is charged nothing. Set it to 'slab' — or to the id of a row
+# in Masters -> Tax — only if you want the dropdowns to come up already
+# pointing at something.
+PMS_TAX_DEFAULT=none
+
+# How often the bell asks the server whether anything has happened, in seconds,
+# and how long notifications are kept before they are tidied away.
+PMS_NOTIFY_POLL=25
+PMS_NOTIFY_KEEP_DAYS=30
+
+VITE_APP_NAME="${APP_NAME}"

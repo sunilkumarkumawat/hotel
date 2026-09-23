@@ -1,0 +1,220 @@
+/*
+|--------------------------------------------------------------------------
+| Pool, hall and car forms
+|--------------------------------------------------------------------------
+| Two small jobs shared by four screens.
+|
+| 1. Picking an in-house guest fills the name, mobile and room in. It does not
+|    lock them: the wife booking the hall on her husband's room is still the
+|    person the banquet manager rings, so whatever is typed afterwards stays.
+|
+| 2. A running total beside the figures, using the same arithmetic the server
+|    will redo on save. The server's answer is the one that gets stored — this
+|    is only so the clerk can see what they are quoting before they commit to
+|    it.
+*/
+
+(function () {
+    'use strict';
+
+    const $ = (selector, scope) => (scope || document).querySelector(selector);
+    const $$ = (selector, scope) => Array.prototype.slice.call((scope || document).querySelectorAll(selector));
+
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+    const money = (n) => '₹ ' + round2(n).toLocaleString('en-IN', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+
+    /* ── Picking an in-house guest ───────────────────────────────────────── */
+
+    $$('[data-stay-pick]').forEach(function (picker) {
+        picker.addEventListener('change', function () {
+            const option = picker.selectedOptions[0];
+            const form = picker.closest('form');
+            if (!form) return;
+
+            const name = $('[data-guest-name]', form);
+            const mobile = $('[data-guest-mobile]', form);
+            const room = $('[data-guest-room]', form);
+
+            if (!option || !option.value) {
+                // Going back to "walk-in" clears the room, because a room
+                // number left behind from a stay nobody is booking against is
+                // how a charge lands on the wrong door.
+                if (room) room.value = '';
+                return;
+            }
+
+            if (name) name.value = option.dataset.name || '';
+            if (mobile) mobile.value = option.dataset.mobile || '';
+            if (room) room.value = option.dataset.room || '';
+        });
+    });
+
+    /* ── Live totals ─────────────────────────────────────────────────────── */
+
+    /** The percent a tax choice works out to — the browser half of App\Support\Tax. */
+    function taxPercent(select) {
+        if (!select) return 0;
+
+        const option = select.selectedOptions[0];
+
+        return option ? Number(option.dataset.percent) || 0 : 0;
+    }
+
+    $$('[data-total-for]').forEach(function (box) {
+        const form = box.closest('form');
+        if (!form) return;
+
+        const kind = box.getAttribute('data-total-for');
+        const num = (name) => Number((($('[name="' + name + '"]', form) || {}).value) || 0);
+
+        function recalc() {
+            let gross = 0;
+
+            if (kind === 'pool') {
+                gross = (num('adults') * num('adult_rate'))
+                    + (num('children') * num('child_rate'))
+                    - num('discount');
+            } else if (kind === 'hall') {
+                gross = (num('rate') * num('qty')) - num('discount');
+
+                // Every extra on the grid, each taxed on its own choice.
+                $$('[data-extra-row]', form).forEach(function (row) {
+                    const qty = Number((($('[data-extra-qty]', row) || {}).value) || 0) || 1;
+                    const price = Number((($('[data-extra-price]', row) || {}).value) || 0);
+                    const line = qty * price;
+
+                    gross += line + (line * taxPercent($('[data-extra-tax]', row))) / 100;
+                });
+            } else if (kind === 'trip') {
+                const chargeable = ($('[name="is_chargeable"]', form) || {}).checked;
+                const perKm = ($('[name="rate_type"]', form) || {}).value === 'km';
+
+                gross = chargeable ? (perKm ? num('km') * num('rate') : num('rate')) : 0;
+            } else if (kind === 'parking') {
+                const chargeable = ($('[name="is_chargeable"]', form) || {}).checked;
+
+                gross = chargeable ? num('hours_preview') * num('rate') : 0;
+            }
+
+            gross = Math.max(0, round2(gross));
+
+            /*
+             * Hall extras are already taxed line by line above, so only the
+             * hire itself is taxed here — taxing the lot again would charge
+             * GST on GST.
+             */
+            const base = kind === 'hall'
+                ? Math.max(0, round2((num('rate') * num('qty')) - num('discount')))
+                : gross;
+
+            const tax = round2((base * taxPercent($('[name="tax_choice"]', form))) / 100);
+
+            box.textContent = money(gross + tax);
+        }
+
+        form.addEventListener('input', recalc);
+        form.addEventListener('change', recalc);
+        recalc();
+    });
+
+    /* ── Modals ──────────────────────────────────────────────────────────── */
+
+    function closeModal(modal) {
+        modal.classList.remove('is-open');
+        document.body.classList.remove('nv-modal-open');
+    }
+
+    $$('[data-open]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const modal = $('[data-modal="' + button.getAttribute('data-open') + '"]');
+            if (!modal) return;
+
+            /*
+             * Every data- attribute on the button is copied into the field of
+             * the same name inside the modal. One dialog then serves every row
+             * of the table — rendering a dialog per row is what makes a list of
+             * two hundred cars take a second to paint.
+             */
+            const action = button.getAttribute('data-action');
+            const form = $('form', modal);
+
+            if (form && action) form.setAttribute('action', action);
+
+            Object.keys(button.dataset).forEach(function (key) {
+                // Every match, not the first: the dialog shows the hours in a
+                // sentence AND in a field, and filling only one of them is
+                // exactly the sort of half-right that nobody notices until a
+                // guest is overcharged.
+                $$('[data-fill="' + key + '"]', modal).forEach(function (field) {
+                    if (field.tagName === 'INPUT' || field.tagName === 'SELECT' || field.tagName === 'TEXTAREA') {
+                        field.value = button.dataset[key];
+                    } else {
+                        field.textContent = button.dataset[key];
+                    }
+                });
+            });
+
+            modal.classList.add('is-open');
+            document.body.classList.add('nv-modal-open');
+
+            const first = $('input:not([type=hidden]), select', modal);
+            if (first) first.focus();
+
+            /*
+             * The total in the dialog has to catch up with the row it was just
+             * given, and nothing has been typed into it yet to trigger that.
+             * The event goes on the FORM rather than on the modal: the listener
+             * is bound to the form, and an event dispatched on an ancestor
+             * bubbles upwards, away from it.
+             */
+            if (form) form.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    });
+
+    $$('[data-modal]').forEach(function (modal) {
+        $$('[data-modal-close]', modal).forEach(function (button) {
+            button.addEventListener('click', function () { closeModal(modal); });
+        });
+
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) closeModal(modal);
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') $$('[data-modal].is-open').forEach(closeModal);
+    });
+
+    /* ── Hall extras: one more row ───────────────────────────────────────── */
+
+    const addExtra = $('[data-add-extra]');
+
+    if (addExtra) {
+        addExtra.addEventListener('click', function () {
+            const rows = $('[data-extra-rows]');
+            const template = $('[data-extra-template]');
+            if (!rows || !template) return;
+
+            const html = template.innerHTML.replace(/__INDEX__/g, String(rows.children.length));
+            const holder = document.createElement('tbody');
+
+            holder.innerHTML = html;
+
+            while (holder.firstElementChild) {
+                rows.appendChild(holder.firstElementChild);
+            }
+        });
+    }
+
+    document.addEventListener('click', function (event) {
+        const remove = event.target.closest('[data-remove-extra]');
+        if (!remove) return;
+
+        const row = remove.closest('[data-extra-row]');
+        if (row) row.remove();
+    });
+})();
