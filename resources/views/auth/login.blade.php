@@ -18,7 +18,7 @@
 
             <span class="nv-signin-mark"><x-icon name="sparkles" :size="23" /></span>
 
-            <h1>Hotel Management Software</h1>
+            <h1>Welcome Back</h1>
             <p>Sign in to continue</p>
 
             @if (session('status'))
