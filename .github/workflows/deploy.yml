@@ -1,0 +1,41 @@
+﻿name: Deploy to VPS on Master Push
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            # Project directory
+            cd ${{ secrets.VPS_PROJECT_PATH || '/var/www/hotel' }}
+
+            # Latest master branch pull
+            git pull origin master
+
+            # Dependencies
+            composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+            # Database migrations
+            php artisan migrate --force
+
+            # Cache clear & optimizations
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            # Permissions
+            chmod -R 775 storage bootstrap/cache
