@@ -1,0 +1,361 @@
+/* ==========================================================================
+   Mobile look — "Colorful & Friendly"
+   ==========================================================================
+
+   Loaded after theme.css (see partials/assets.blade.php), and everything in
+   this file lives inside one @media (max-width: 1024px) block — the same
+   width theme.js already treats as "not desktop" (see isDesktop() in
+   theme.js, and the sidebar-collapse rules theme.css already has at that
+   width). Above 1024px this file changes nothing at all: the desktop admin
+   screen — the one running on the front-desk PC itself — is untouched.
+
+   The trick that makes this a small file instead of a rewrite: theme.css
+   already draws almost everything from --nv-* custom properties (colour,
+   font, radius, shadow). Re-declaring those properties inside the media
+   query below re-skins every screen that uses them — cards, stats, badges,
+   avatars, buttons, the topbar — without touching a single Blade file. Only
+   the handful of rules that theme.css wrote with a literal value instead of
+   a variable (an icon badge's border-radius, for instance) are repeated
+   here explicitly.
+
+   Both the plain :root block and :root[data-theme='dark'] are set to the
+   SAME values on purpose. The desktop site remembers a light/dark choice
+   (nova.theme in localStorage) and defaults to dark — but "Colorful &
+   Friendly" is the one mobile look, not a pair of them, so phones get it
+   either way and the now-decorative sun/moon toggle is hidden below rather
+   than left as a button that does nothing.
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+
+    /* ---------------------------------------------------------------------
+       1. Palette, type and shape — redeclaring theme.css's own tokens
+       --------------------------------------------------------------------- */
+
+    :root,
+    :root[data-theme='dark'] {
+        --nv-font: 'Nunito', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', sans-serif;
+        --nv-font-display: 'Baloo 2', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', sans-serif;
+
+        --nv-bg: #fffbf5;
+        --nv-surface: #ffffff;
+        --nv-surface-2: #fff8f0;
+        --nv-surface-3: #fff1e4;
+
+        --nv-sidebar: #3b2a1e;
+        --nv-sidebar-2: #4a3728;
+        --nv-sidebar-text: #e4d3be;
+        --nv-sidebar-active: #ffffff;
+
+        --nv-border: #f5e4d3;
+        --nv-border-strong: #ebd3b4;
+        --nv-ring: rgb(194 73 31 / 0.35);
+
+        --nv-text: #382c20;
+        --nv-text-2: #5c4e3e;
+        --nv-muted: #6e5c47;
+        --nv-faint: #b7a78e;
+
+        /* Terracotta — the brand accent from the approved mock-up, deepened
+           just enough that white button text and small badge text both stay
+           above 4.5:1 against it (the original theme keeps this same habit:
+           --nv-primary is always a deep tone, --nv-primary-soft carries the
+           pastel). */
+        --nv-primary: #c2491f;
+        --nv-primary-hover: #a83d19;
+        --nv-primary-soft: #ffe3d3;
+        --nv-primary-soft-text: #a83d19;
+        --nv-on-primary: #ffffff;
+
+        --nv-accent: #7a3fa0;
+        --nv-accent-hover: #642f86;
+        --nv-accent-soft: #f3e8fa;
+        --nv-accent-soft-text: #642f86;
+
+        --nv-success: #1f6b46;
+        --nv-success-soft: #e3f3e8;
+        --nv-success-solid: #1f6b46;
+
+        --nv-warning: #8f5f0c;
+        --nv-warning-soft: #fff1d6;
+        --nv-warning-solid: #8f5f0c;
+
+        --nv-danger: #c13655;
+        --nv-danger-soft: #fde4ea;
+        --nv-danger-solid: #c13655;
+
+        --nv-info: #2e62b0;
+        --nv-info-soft: #e4edfb;
+        --nv-info-solid: #2e62b0;
+
+        --nv-radius: 16px;
+        --nv-radius-sm: 12px;
+        --nv-radius-lg: 22px;
+
+        --nv-shadow-xs: 0 1px 2px rgb(61 50 38 / 0.06);
+        --nv-shadow-sm: 0 1px 3px rgb(61 50 38 / 0.08), 0 1px 2px rgb(61 50 38 / 0.04);
+        --nv-shadow: 0 8px 24px -12px rgb(61 50 38 / 0.18), 0 2px 6px -2px rgb(61 50 38 / 0.06);
+        --nv-shadow-lg: 0 24px 48px -24px rgb(61 50 38 / 0.32);
+    }
+
+    body {
+        background: var(--nv-bg);
+    }
+
+    /* ---------------------------------------------------------------------
+       2. A little more rounding than theme.css hard-codes
+       --------------------------------------------------------------------- */
+
+    .nv-stat,
+    .nv-card,
+    .nv-modal,
+    .nv-btn,
+    .nv-input,
+    .nv-select {
+        border-radius: var(--nv-radius);
+    }
+
+    .nv-avatar {
+        border-radius: 12px;
+    }
+    .nv-avatar-lg {
+        border-radius: 16px;
+    }
+
+    .nv-stat-icon {
+        border-radius: 12px;
+    }
+
+    /* ---------------------------------------------------------------------
+       3. Stat cards — a tinted card per tone, not just a tinted icon
+       --------------------------------------------------------------------- */
+
+    .nv-stat {
+        border-color: transparent;
+    }
+
+    .nv-stat:has(.nv-stat-icon.is-success) { background: var(--nv-success-soft); }
+    .nv-stat:has(.nv-stat-icon.is-warning) { background: var(--nv-warning-soft); }
+    .nv-stat:has(.nv-stat-icon.is-info)    { background: var(--nv-info-soft); }
+    .nv-stat:has(.nv-stat-icon.is-danger)  { background: var(--nv-danger-soft); }
+    .nv-stat:has(.nv-stat-icon:not(.is-success):not(.is-warning):not(.is-info):not(.is-danger)) {
+        background: var(--nv-primary-soft);
+    }
+
+    /* The icon keeps its tone colour (already correct via theme.css's own
+       .is-success / .is-warning / … rules below it) but sits on a near-white
+       badge now that the card itself carries the tint. */
+    .nv-stat-icon,
+    .nv-stat-icon.is-success,
+    .nv-stat-icon.is-warning,
+    .nv-stat-icon.is-info,
+    .nv-stat-icon.is-danger {
+        background: rgb(255 255 255 / 0.72);
+    }
+
+    /* ---------------------------------------------------------------------
+       4. Controls that no longer do anything useful on mobile
+       --------------------------------------------------------------------- */
+
+    /* The sidebar toggle: superseded by the bottom bar's own "More" sheet
+       (partials/mobile-nav.blade.php) below. The sidebar itself is left
+       completely alone — still off-screen by default, still fully working
+       for a keyboard user or a narrow desktop window — only its trigger
+       button is hidden here. */
+    [data-toggle='sidebar'] {
+        display: none;
+    }
+
+    /* The light/dark switch: this file forces one look on mobile regardless
+       of the stored nova.theme preference, so a toggle that visibly did
+       nothing would read as broken. Desktop keeps the real switch. */
+    .nv-theme-toggle {
+        display: none;
+    }
+
+    /* ---------------------------------------------------------------------
+       5. Room for the fixed bottom bar
+       --------------------------------------------------------------------- */
+
+    .nv-main {
+        padding-bottom: calc(84px + env(safe-area-inset-bottom));
+    }
+}
+
+/* ==========================================================================
+   Bottom tab bar + "More" sheet (partials/mobile-nav.blade.php)
+
+   Outside the max-width block on purpose: the markup itself only renders
+   inside that same partial, and .nv-mobilebar is display:none above 1024px
+   below — one rule doing the hiding is easier to audit than the whole
+   block being conditional twice.
+   ========================================================================== */
+
+.nv-mobilebar,
+.nv-more-overlay,
+.nv-more-sheet {
+    display: none;
+}
+
+@media (max-width: 1024px) {
+    .nv-mobilebar {
+        display: flex;
+        align-items: stretch;
+        justify-content: space-around;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 70;
+        height: 64px;
+        padding-bottom: env(safe-area-inset-bottom);
+        background: rgb(255 255 255 / 0.92);
+        backdrop-filter: saturate(180%) blur(16px);
+        border-top: 1px solid var(--nv-border);
+        box-shadow: 0 -8px 24px -16px rgb(61 50 38 / 0.22);
+    }
+
+    .nv-mobilebar-item {
+        flex: 1 1 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        border: none;
+        background: none;
+        padding: 6px 2px 0;
+        font-family: var(--nv-font);
+        font-size: 10.5px;
+        font-weight: 700;
+        color: var(--nv-faint);
+        text-decoration: none;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .nv-mobilebar-item svg {
+        width: 21px;
+        height: 21px;
+    }
+
+    .nv-mobilebar-item.is-active {
+        color: var(--nv-primary);
+    }
+
+    /* ---- the "More" sheet -------------------------------------------- */
+
+    .nv-more-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 75;
+        background: rgb(56 44 32 / 0.42);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.2s ease;
+    }
+
+    .nv-more-sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 80;
+        max-height: min(78vh, 640px);
+        display: flex;
+        flex-direction: column;
+        background: var(--nv-surface);
+        border-radius: 22px 22px 0 0;
+        box-shadow: var(--nv-shadow-lg);
+        transform: translateY(100%);
+        transition: transform 0.24s ease;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    [data-more-open] .nv-more-overlay {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    [data-more-open] .nv-more-sheet {
+        transform: translateY(0);
+    }
+
+    .nv-more-sheet-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 99px;
+        background: var(--nv-border-strong);
+        margin: 10px auto 0;
+        flex: none;
+    }
+
+    .nv-more-sheet-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px 12px;
+        border-bottom: 1px solid var(--nv-border);
+        flex: none;
+    }
+
+    .nv-more-sheet-head strong {
+        font-family: var(--nv-font-display);
+        font-size: 16px;
+        color: var(--nv-text);
+    }
+
+    .nv-more-sheet-body {
+        overflow-y: auto;
+        padding: 8px 10px calc(20px + env(safe-area-inset-bottom));
+    }
+
+    /* The sheet reuses partials/menu-list.blade.php verbatim — the very
+       same nv-nav markup the sidebar uses — so it inherits the sidebar's
+       dark-on-dark styling from theme.css (light text, a near-white hover,
+       an indigo active state, all tuned for the sidebar's own dark
+       background). Every one of those hard-coded colours is overridden
+       here for the sheet's light background instead; theme.css's own
+       tone/token-based rules elsewhere are left alone. */
+    .nv-more-sheet .nv-nav-section {
+        color: var(--nv-faint);
+    }
+
+    .nv-more-sheet .nv-nav-link,
+    .nv-more-sheet .nv-nav-toggle,
+    .nv-more-sheet .nv-nav-child {
+        color: var(--nv-text-2);
+    }
+
+    .nv-more-sheet .nv-nav-link:hover,
+    .nv-more-sheet .nv-nav-toggle:hover,
+    .nv-more-sheet .nv-nav-child:hover {
+        background: var(--nv-surface-2);
+        color: var(--nv-text);
+    }
+
+    .nv-more-sheet .nv-nav-link.is-active,
+    .nv-more-sheet .nv-nav-toggle.is-active,
+    .nv-more-sheet .nv-nav-child.is-active {
+        background: var(--nv-primary-soft);
+        color: var(--nv-primary-soft-text);
+    }
+    .nv-more-sheet .nv-nav-link.is-active::before {
+        background: var(--nv-primary);
+    }
+    .nv-more-sheet .nv-nav-child.is-active .nv-nav-dot {
+        background: var(--nv-primary-soft-text);
+    }
+
+    .nv-more-sheet .nv-nav-text {
+        color: inherit;
+    }
+
+    .nv-more-sheet .nv-nav-pill.is-soon {
+        background: var(--nv-warning-soft);
+        color: var(--nv-warning);
+    }
+}

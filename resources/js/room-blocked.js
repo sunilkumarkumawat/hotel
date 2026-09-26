@@ -1,0 +1,189 @@
+/*
+|------------------------------------------------------------------------------
+| Room Blocked
+|------------------------------------------------------------------------------
+| Reveals the Block button the moment a room is ticked and hides it again when
+| the last tick goes, does the same for Release against rooms that are already
+| blocked, and opens the two dialogs.
+|
+| Both actions are checked again on the server — a room with a guest in it is
+| refused there whatever this file does — so nothing here is load-bearing. With
+| the script missing the buttons simply stay hidden, which is the safe side to
+| fail on.
+*/
+
+(function () {
+    'use strict';
+
+    var all = function (sel, root) {
+        return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+    };
+
+    /* ── Dialogs ────────────────────────────────────────────────────────── */
+
+    function closeModal(modal) {
+        modal.classList.remove('is-open');
+        document.body.style.overflow = '';
+    }
+
+    function openModal(name) {
+        var modal = document.querySelector('[data-modal="' + name + '"]');
+
+        if (!modal) return null;
+
+        modal.classList.add('is-open');
+        document.body.style.overflow = 'hidden';
+
+        var first = modal.querySelector('input:not([type=hidden]), select');
+
+        if (first) first.focus();
+
+        return modal;
+    }
+
+    all('[data-open]').forEach(function (button) {
+        button.addEventListener('click', function () { openModal(button.getAttribute('data-open')); });
+    });
+
+    all('[data-modal]').forEach(function (modal) {
+        all('[data-modal-close]', modal).forEach(function (b) {
+            b.addEventListener('click', function () { closeModal(modal); });
+        });
+
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) closeModal(modal);
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') all('[data-modal].is-open').forEach(closeModal);
+    });
+
+    /* ── The tick boxes ─────────────────────────────────────────────────── */
+
+    var form = document.querySelector('[data-rb]');
+
+    if (!form) return;
+
+    var boxes = all('[data-rb-room]', form);
+    var master = form.querySelector('[data-rb-all]');
+    var count = form.querySelector('[data-rb-count]');
+    var blockBtn = form.querySelector('[data-rb-block]');
+    var releaseBtn = form.querySelector('[data-rb-release]');
+    var picked = document.querySelector('[data-rb-picked]');
+    var releaseForm = document.querySelector('[data-rb-release-form]');
+
+    var ticked = function () {
+        return boxes.filter(function (b) { return b.checked; });
+    };
+
+    /** Rooms that are not blocked yet — the ones Block has work to do on. */
+    var free = function () {
+        return ticked().filter(function (b) { return !b.getAttribute('data-block'); });
+    };
+
+    /** Rooms that already carry a block — the ones Release can undo. */
+    var held = function () {
+        return ticked().filter(function (b) { return !!b.getAttribute('data-block'); });
+    };
+
+    function label(list) {
+        var numbers = list.map(function (b) {
+            var aria = b.getAttribute('aria-label') || '';
+
+            return aria.replace(/^Room\s+/, '');
+        });
+
+        if (numbers.length <= 8) return numbers.join(', ');
+
+        return numbers.slice(0, 8).join(', ') + ' and ' + (numbers.length - 8) + ' more';
+    }
+
+    function sync() {
+        var on = ticked();
+        var canBlock = free();
+        var canRelease = held();
+
+        if (count) {
+            count.textContent = on.length
+                ? on.length + ' room(s) ticked.'
+                : 'No rooms ticked.';
+        }
+
+        // This is the whole ask: the button is there when it has something to
+        // do, and gone when it does not.
+        if (blockBtn) blockBtn.hidden = canBlock.length === 0;
+        if (releaseBtn) releaseBtn.hidden = canRelease.length === 0;
+
+        if (picked) {
+            picked.textContent = canBlock.length
+                ? canBlock.length + ' room(s): ' + label(canBlock)
+                : '';
+        }
+
+        if (master) {
+            master.checked = on.length > 0 && on.length === boxes.length;
+            master.indeterminate = on.length > 0 && on.length < boxes.length;
+        }
+    }
+
+    boxes.forEach(function (box) { box.addEventListener('change', sync); });
+
+    if (master) {
+        master.addEventListener('change', function () {
+            boxes.forEach(function (box) { box.checked = master.checked; });
+            sync();
+        });
+    }
+
+    /* ── Block ──────────────────────────────────────────────────────────── */
+
+    if (blockBtn) {
+        blockBtn.addEventListener('click', function () {
+            if (!free().length) return;
+
+            openModal('block');
+        });
+    }
+
+    form.addEventListener('submit', function (event) {
+        if (!free().length) {
+            event.preventDefault();
+            alert('Tick a room that is not already blocked.');
+
+            return;
+        }
+
+        // Blocked rooms are ticked for Release, not for Block — sending them
+        // would only earn an "already blocked" line in the message.
+        held().forEach(function (box) { box.checked = false; });
+    });
+
+    /* ── Release ────────────────────────────────────────────────────────── */
+
+    if (releaseForm) {
+        releaseForm.addEventListener('submit', function (event) {
+            var list = held();
+
+            if (!list.length) {
+                event.preventDefault();
+
+                return;
+            }
+
+            // Rebuilt every time: the ticks can have changed since last press.
+            all('[name="blocks[]"]', releaseForm).forEach(function (el) { el.remove(); });
+
+            list.forEach(function (box) {
+                var field = document.createElement('input');
+
+                field.type = 'hidden';
+                field.name = 'blocks[]';
+                field.value = box.getAttribute('data-block');
+                releaseForm.appendChild(field);
+            });
+        });
+    }
+
+    sync();
+})();

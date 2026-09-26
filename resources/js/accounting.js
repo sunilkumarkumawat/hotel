@@ -1,0 +1,148 @@
+/*
+|--------------------------------------------------------------------------
+| The voucher entry grid
+|--------------------------------------------------------------------------
+| Two jobs, and both of them exist so a clerk finds out about a problem before
+| pressing Save rather than after:
+|
+|   • a running total under the lines, and on a Journal, whether the two sides
+|     agree. The server checks this again and refuses anything that does not
+|     balance — this is the warning, not the guard.
+|
+|   • a line is a debit or a credit, never both. Typing in one column empties
+|     the other, because a line that balances itself would let a whole voucher
+|     pass the balance check while saying nothing at all.
+*/
+
+(function () {
+    'use strict';
+
+    const form = document.querySelector('[data-voucher-form]');
+    if (!form) return;
+
+    const $ = (selector, scope) => (scope || document).querySelector(selector);
+    const $$ = (selector, scope) => Array.prototype.slice.call((scope || document).querySelectorAll(selector));
+
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const money = (n) => round2(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const rows = $('[data-voucher-rows]', form);
+    const template = $('[data-line-template]', form);
+    const note = $('[data-balance-note]', form);
+
+    function sum(selector) {
+        return $$(selector, form).reduce(function (total, input) {
+            return total + (Number(input.value) || 0);
+        }, 0);
+    }
+
+    function recalc() {
+        const debitBox = $('[data-total-debit]', form);
+        const creditBox = $('[data-total-credit]', form);
+        const amountBox = $('[data-total-amount]', form);
+
+        if (amountBox) {
+            amountBox.textContent = money(sum('[data-line-amount]'));
+
+            if (note) note.textContent = '';
+
+            return;
+        }
+
+        const debit = round2(sum('[data-line-debit]'));
+        const credit = round2(sum('[data-line-credit]'));
+
+        if (debitBox) debitBox.textContent = money(debit);
+        if (creditBox) creditBox.textContent = money(credit);
+
+        if (!note) return;
+
+        const difference = round2(debit - credit);
+
+        if (debit === 0 && credit === 0) {
+            note.textContent = '';
+            note.className = '';
+        } else if (difference === 0) {
+            note.textContent = 'Balanced.';
+            note.className = 'nv-led-balanced';
+        } else {
+            note.textContent = 'Out by ₹ ' + money(Math.abs(difference))
+                + (difference > 0 ? ' on the debit side.' : ' on the credit side.');
+            note.className = 'nv-led-unbalanced';
+        }
+    }
+
+    /*
+     * One side per line. Typing a debit clears the credit and the other way
+     * round — the alternative is a line that nets to nothing and a voucher that
+     * balances while meaning nothing.
+     */
+    form.addEventListener('input', function (event) {
+        const target = event.target;
+
+        if (target.hasAttribute('data-line-debit') && Number(target.value) > 0) {
+            const row = target.closest('[data-voucher-row]');
+            const credit = row ? $('[data-line-credit]', row) : null;
+
+            if (credit) credit.value = '';
+        }
+
+        if (target.hasAttribute('data-line-credit') && Number(target.value) > 0) {
+            const row = target.closest('[data-voucher-row]');
+            const debit = row ? $('[data-line-debit]', row) : null;
+
+            if (debit) debit.value = '';
+        }
+
+        recalc();
+    });
+
+    form.addEventListener('change', recalc);
+
+    /* ── Rows ────────────────────────────────────────────────────────────── */
+
+    const add = $('[data-add-line]', form);
+
+    /*
+     * A counter rather than the row count: rows get removed from the middle,
+     * and reusing an index would make two rows share a name and one of them
+     * would silently overwrite the other on the server. PHP does not mind gaps
+     * in the array — it minds collisions.
+     */
+    let nextIndex = rows ? rows.children.length : 0;
+
+    if (add && rows && template) {
+        add.addEventListener('click', function () {
+            const html = template.innerHTML.replace(/__INDEX__/g, String(nextIndex++));
+            const holder = document.createElement('tbody');
+
+            holder.innerHTML = html;
+
+            while (holder.firstElementChild) {
+                rows.appendChild(holder.firstElementChild);
+            }
+
+            recalc();
+        });
+    }
+
+    form.addEventListener('click', function (event) {
+        const remove = event.target.closest('[data-remove-line]');
+        if (!remove) return;
+
+        const row = remove.closest('[data-voucher-row]');
+        if (!row || !rows) return;
+
+        // Never leave the grid with nothing in it — a form with no rows looks
+        // broken and there is no way back without reloading the page.
+        if (rows.children.length > 1) {
+            row.remove();
+        } else {
+            $$('input, select', row).forEach(function (field) { field.value = ''; });
+        }
+
+        recalc();
+    });
+
+    recalc();
+})();
