@@ -17,18 +17,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Selling time in the pool.
- *
- * A booking is a pool, a day and two times, for so many adults and so many
- * children. Two things can stop one being taken and they are different in kind:
- * the pool is already booked for part of that window, or it would hold more
- * people than it is allowed to. The first is an inconvenience; the second is a
- * safety limit, which is why capacity is checked here and not left to the desk.
- */
 class PoolController extends Controller
 {
-    /** GET pool/bookings */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -41,7 +31,6 @@ class PoolController extends Controller
             'q' => $request->string('q')->toString(),
         ];
 
-        // A range typed backwards is a typo, not a reason to show nothing.
         if ($filters['from'] > $filters['to']) {
             [$filters['from'], $filters['to']] = [$filters['to'], $filters['from']];
         }
@@ -50,9 +39,6 @@ class PoolController extends Controller
             ->forBranch($branchId)
             ->with(['pool', 'stay.room'])
             ->where('booking_date', '>=', $filters['from'])
-            // "on or before" written as "before the next day" — a date column
-            // can come back with 00:00:00 attached, and `<= $to` would then
-            // drop every booking on the last day of the range.
             ->where('booking_date', '<', \Carbon\CarbonImmutable::parse($filters['to'])->addDay()->toDateString())
             ->when($filters['pool'], fn ($q, $id) => $q->where('pool_id', $id))
             ->when($filters['status'], fn ($q, $s) => $q->where('status', $s))
@@ -83,8 +69,6 @@ class PoolController extends Controller
             ],
         ]);
     }
-
-    /** GET pool/bookings/new  ·  GET pool/bookings/{booking}/edit */
     public function form(Request $request, ?int $booking = null): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -92,6 +76,8 @@ class PoolController extends Controller
         $row = $booking
             ? PoolBooking::query()->forBranch($branchId)->findOrFail($booking)
             : new PoolBooking([
+                'guest_name' => $request->string('guest_name')->toString() ?: null,
+                'mobile' => $request->string('mobile')->toString() ?: null,
                 'booking_date' => Facility::date($request->string('date')->toString()),
                 'from_time' => '10:00',
                 'to_time' => '12:00',
@@ -109,8 +95,6 @@ class PoolController extends Controller
             'taxChoices' => Tax::optionsFor($row->tax_choice, $branchId, false, (float) $row->tax_percent),
         ]);
     }
-
-    /** POST pool/bookings  ·  PUT pool/bookings/{booking} */
     public function save(Request $request, ?int $booking = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -174,7 +158,6 @@ class PoolController extends Controller
         $childRate = round((float) ($data['child_rate'] ?? $pool->child_rate), 2);
         $discount = round((float) ($data['discount'] ?? 0), 2);
 
-        // The gross, before tax, and never below zero however big the discount.
         $gross = max(0, round(($adults * $adultRate) + ($children * $childRate) - $discount, 2));
 
         $choice = Tax::normalise($data['tax_choice'] ?? Tax::defaultChoice());
@@ -256,8 +239,6 @@ class PoolController extends Controller
             ->with('status', 'Pool booking ' . $row->booking_no . ' saved.')
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
-
-    /** POST pool/bookings/{booking}/status */
     public function status(Request $request, int $booking): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -275,8 +256,6 @@ class PoolController extends Controller
 
         return back()->with('status', $row->booking_no . ' is now ' . strtolower($row->status_label) . '.');
     }
-
-    /** POST pool/bookings/{booking}/cancel */
     public function cancel(Request $request, int $booking): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -289,9 +268,6 @@ class PoolController extends Controller
         $warning = null;
 
         DB::transaction(function () use ($row, $branchId, &$warning) {
-            // The charge comes off the folio first: a cancelled booking that
-            // leaves its line on the bill is how a guest gets charged for a
-            // swim they were told was cancelled.
             $warning = Facility::releaseFolio($row, $branchId);
 
             $row->update(['status' => 'cancelled']);
@@ -307,8 +283,6 @@ class PoolController extends Controller
             ->with('status', $row->booking_no . ' cancelled.')
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
-
-    /** GET pool/calendar — one day, every pool, hour by hour. */
     public function calendar(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -324,13 +298,6 @@ class PoolController extends Controller
             ->get()
             ->groupBy('pool_id');
 
-        /*
-         * The grid runs from the earliest opening time to the latest closing
-         * time of the pools on screen, so a hotel whose pool opens at six does
-         * not stare at six empty columns every morning. It widens to fit a
-         * booking that somehow falls outside those hours rather than clipping
-         * it — a bar you cannot see is worse than an odd-looking grid.
-         */
         $starts = $pools->pluck('open_time')->filter()->map(fn ($t) => Facility::minutes($t));
         $ends = $pools->pluck('close_time')->filter()->map(fn ($t) => Facility::minutes($t));
 
@@ -355,24 +322,6 @@ class PoolController extends Controller
             'hours' => range($openHour, max($openHour, $closeHour - 1)),
         ]);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * Why this session cannot be taken — or null when it can.
-     *
-     * Two separate questions, and the message says which one failed because
-     * "the pool is busy" and "the pool would be too full" need different things
-     * done about them.
-     *
-     * The overlap rule is the same half-open one the room calendar uses: a
-     * session that ends at 12:00 does not clash with one starting at 12:00.
-     * `$exceptId` is the booking being edited, which must not find itself busy.
-     */
     private function poolIsBusy(
         Pool $pool,
         int $branchId,
@@ -392,14 +341,6 @@ class PoolController extends Controller
             ->when($exceptId, fn ($q, $id) => $q->where('id', '!=', $id))
             ->get();
 
-        /*
-         * Capacity is what decides whether sessions may share the water at all.
-         *
-         * Set it, and overlapping bookings are fine until the total would pass
-         * it. Leave it at 0 — which is what a small hotel with one pool and no
-         * lifeguard rota does — and the pool is booked exclusively, because
-         * without a number there is no honest way to say how many more fit.
-         */
         if ((int) $pool->capacity > 0) {
             $already = $overlapping->sum(fn (PoolBooking $b) => (int) $b->adults + (int) $b->children);
             $wanted = (int) $data['adults'] + (int) ($data['children'] ?? 0);
@@ -417,7 +358,6 @@ class PoolController extends Controller
                 );
             }
 
-            // Within capacity, so sharing the water is fine.
             return null;
         }
 

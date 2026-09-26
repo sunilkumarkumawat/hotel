@@ -18,25 +18,13 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
-/**
- * The front-desk dashboard.
- *
- * This used to be an admin summary — users, roles, modules. Useful on day one,
- * useless on day two: the person who opens this screen at seven in the morning
- * wants to know how full the house is, who is arriving, and which rooms
- * housekeeping has not released yet.
- *
- * The system counts have not been thrown away; they sit at the bottom, and only
- * for somebody who can actually act on them.
- */
+
 class DashboardController extends Controller
 {
     public function dashboard(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
 
-        // No branch yet — a fresh install, before Administration → Branch has
-        // been filled in. Show the system card rather than dividing by zero.
         if (! $branchId) {
             return view('dashboard', $this->systemOnly($request));
         }
@@ -56,9 +44,6 @@ class DashboardController extends Controller
         $data = new HotelDashboard($branchId, $date);
         $movements = $data->movements();
 
-        // Same "read once, share" rule as the room board: today's money is
-        // computed once here and handed to every card that needs a piece of
-        // it, rather than each one running its own revenue query.
         $money = Reports::run('occupancy', $branchId, ['from' => $date, 'to' => $date]);
 
         return view('dashboard', [
@@ -84,10 +69,6 @@ class DashboardController extends Controller
     }
 
     /**
-     * The guest-feedback panel's numbers, or null when nobody has answered
-     * anything yet — the view uses that to show an empty state instead of a
-     * row of zeroes.
-     *
      * @return array{count: int, average: ?float, needs_attention: int, areas: Collection}|null
      */
     private function feedbackSummary(int $branchId): ?array

@@ -112,7 +112,6 @@ class BranchController extends Controller
         );
     }
 
-    /** Switch the branch the signed-in user is working in. */
     public function changeBranch(Request $request): RedirectResponse
     {
         $request->validate(['branch_id' => ['required', Rule::exists('branches', 'id')]]);
@@ -128,13 +127,6 @@ class BranchController extends Controller
 
         return back()->with('status', 'Branch switched.');
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Cascading dropdowns
-    |--------------------------------------------------------------------------
-    */
-
     public function getState(int $countryId): JsonResponse
     {
         return response()->json(Helper::getStates($countryId));
@@ -151,7 +143,6 @@ class BranchController extends Controller
         return $request->validate([
             'branch_code' => ['required', 'string', 'max:40', Rule::unique('branches', 'branch_code')->ignore($branch)],
             'branch_name' => ['required', 'string', 'max:120'],
-            // Printed on the registration card and every bill after it.
             'legal_name' => ['nullable', 'string', 'max:160'],
             'gst_no' => ['nullable', 'string', 'max:20', 'regex:/^[0-9]{2}[A-Za-z]{5}[0-9]{4}[A-Za-z][0-9A-Za-z][Zz][0-9A-Za-z]$/'],
             'sac_code' => ['nullable', 'string', 'max:12'],

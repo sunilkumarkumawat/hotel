@@ -19,21 +19,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Fetching guests, and taking them back.
- *
- * A pickup is normally booked against a *reservation* — the guest has not
- * arrived, so there is no stay to hang it on — and a drop against a stay. Both
- * links are offered and both are optional, because the airport run for a
- * walk-in is neither.
- *
- * Like parking, a trip is recorded first and charged only if asked:
- * `is_chargeable` starts off, and a hotel whose tariff includes the airport
- * pickup never turns it on.
- */
 class TripController extends Controller
 {
-    /** GET car/trips */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -85,7 +72,6 @@ class TripController extends Controller
         ]);
     }
 
-    /** GET car/trips/new  ·  GET car/trips/{trip}/edit */
     public function form(Request $request, ?int $trip = null): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -115,7 +101,6 @@ class TripController extends Controller
         ]);
     }
 
-    /** POST car/trips  ·  PUT car/trips/{trip} */
     public function save(Request $request, ?int $trip = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -163,8 +148,6 @@ class TripController extends Controller
             return back()->with('error', 'That vehicle is not one of this branch\'s.')->withInput();
         }
 
-        // Booked against a reservation, checked against the branch — a posted id
-        // is not a permission check.
         $reservationId = null;
 
         if ($data['reservation_id']) {
@@ -178,11 +161,6 @@ class TripController extends Controller
             }
         }
 
-        /*
-         * The tick decides, and nothing else. A trip with it off is worth
-         * nothing however many kilometres are typed in — which is the whole
-         * point of recording free pickups at all.
-         */
         $chargeable = (bool) ($data['is_chargeable'] ?? false);
         $km = round((float) ($data['km'] ?? 0), 2);
         $rateType = $data['rate_type'];
@@ -219,9 +197,6 @@ class TripController extends Controller
                 'pax' => (int) ($data['pax'] ?? 1),
                 'luggage' => (int) ($data['luggage'] ?? 0),
                 'vehicle_id' => $vehicle?->id,
-                // Copied off the vehicle rather than read through it: the
-                // regular driver being off sick must not rewrite who drove
-                // last Tuesday.
                 'driver_name' => $data['driver_name'] ?: $vehicle?->driver_name,
                 'driver_mobile' => $data['driver_mobile'] ?: $vehicle?->driver_mobile,
                 'from_place' => $data['from_place'],
@@ -286,7 +261,6 @@ class TripController extends Controller
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
 
-    /** POST car/trips/{trip}/status */
     public function status(Request $request, int $trip): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -305,7 +279,6 @@ class TripController extends Controller
         DB::transaction(function () use ($row, $branchId, $data, &$warning) {
             $row->update(['status' => $data['status']]);
 
-            // A cancelled trip takes its charge back off the guest's bill.
             if ($data['status'] === 'cancelled') {
                 $warning = Facility::releaseFolio($row, $branchId);
             }
@@ -317,12 +290,6 @@ class TripController extends Controller
             default => null,
         };
 
-        /*
-         * "The car has left" is the one message a guest waiting outside an
-         * airport actually wants, and it is the only status change worth
-         * putting on their phone — a trip marked finished is news to the desk,
-         * not to the person who just got out of the car.
-         */
         if ($data['status'] === 'started') {
             GuestMessage::send('guest.trip-started', $row->mobile, [
                 'guest' => $row->guest_name,
@@ -346,18 +313,6 @@ class TripController extends Controller
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * Bookings a pickup could be for — arriving in the next fortnight.
-     *
-     * Not every booking ever taken: a pickup is arranged days ahead, and a
-     * dropdown of three years of history is a dropdown nobody uses.
-     */
     private function arrivals(int $branchId)
     {
         return Reservation::query()

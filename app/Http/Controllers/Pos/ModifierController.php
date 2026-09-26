@@ -9,14 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
-/**
- * Modifiers — one answer inside a group, and what it adds to the price.
- *
- * Typed in as a batch, the same as Items: a topping list arrives ten at a
- * time, not one dialog at a time. Price is what this choice adds — left
- * blank, it is a free choice, like "No Onion" inside a Toppings group that
- * otherwise charges for everything else in it.
- */
+
 class ModifierController extends SetupListController
 {
     protected function definition(): array
@@ -73,11 +66,6 @@ class ModifierController extends SetupListController
         ];
     }
 
-    /**
-     * A blank price box is not "not typed" here — it is "free" — so it is
-     * stored as 0 rather than as NULL, which would print as "—" instead of
-     * "Free" on the list.
-     */
     protected function beforeSave(array $data, Request $request, ?Model $row): array
     {
         if (array_key_exists('price', $data) && ($data['price'] === null || $data['price'] === '')) {

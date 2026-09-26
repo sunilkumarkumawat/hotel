@@ -13,24 +13,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * The books you read rather than write.
- *
- * Day Book, Cash Book, Bank Book, Ledger Statement and All Receipt are all
- * views over the same two tables — `vouchers` and `voucher_entries` — which is
- * why none of them can disagree with another. Nothing here writes anything.
- *
- * Every one of them reads through {@see \App\Models\Accounting\Voucher} scopes,
- * so cancelled vouchers are left out in one place and cannot be forgotten on
- * the one screen nobody re-reads.
- */
 class BookController extends Controller
 {
-    /**
-     * GET accounting/day-book
-     *
-     * Everything posted on a day, in order. The screen a manager opens first.
-     */
+
     public function dayBook(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -67,24 +52,16 @@ class BookController extends Controller
         ]);
     }
 
-    /** GET accounting/cash-book */
     public function cashBook(Request $request): View
     {
         return $this->book($request, 'cash', 'Cash Book', 'The cash box, movement by movement.');
     }
 
-    /** GET accounting/bank-book */
     public function bankBook(Request $request): View
     {
         return $this->book($request, 'bank', 'Bank Book', 'One bank account, movement by movement.');
     }
 
-    /**
-     * GET accounting/ledger-statement
-     *
-     * The same statement for any ledger at all — opening, every movement, a
-     * running balance, and where it closes.
-     */
     public function statement(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -105,7 +82,6 @@ class BookController extends Controller
         ]);
     }
 
-    /** GET accounting/ledger-statement/export */
     public function exportStatement(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -144,18 +120,6 @@ class BookController extends Controller
             fclose($out);
         }, $name, ['Content-Type' => 'text/csv']);
     }
-
-    /**
-     * GET accounting/all-receipt
-     *
-     * Every rupee that came in, wherever it was taken.
-     *
-     * Three separate sources on one screen, and they are *not* added together
-     * into one grand total by accident: a front-office settlement and the
-     * receipt voucher an accountant later posts for it are the same money seen
-     * twice. Each source is totalled on its own and the screen says so, which
-     * is the honest answer to "how much did we take today".
-     */
     public function allReceipts(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -216,13 +180,6 @@ class BookController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /** Cash Book and Bank Book are one screen asked two questions. */
     private function book(Request $request, string $cashType, string $title, string $subtitle): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -241,21 +198,12 @@ class BookController extends Controller
             'to' => $to,
             'title' => $title,
             'subtitle' => $subtitle,
-            // The Cash Book has nothing to show until a ledger has been marked
-            // as the cash box, and saying that beats an empty table.
             'emptyHint' => $cashType === 'cash'
                 ? 'No ledger is marked as the cash box yet. Open Accounting → Ledger, edit the one that is, and set “This is the cash box”.'
                 : 'No ledger is marked as a bank account yet. Open Accounting → Ledger, edit the one that is, and set “This is a bank account”.',
         ]);
     }
 
-    /**
-     * The ledger the screen is looking at.
-     *
-     * Whatever was asked for — but only if it is on the list this screen is
-     * allowed to show, so `?ledger=` cannot turn the Cash Book into a statement
-     * of somebody's salary account.
-     */
     private function chosenLedger(Request $request, $ledgers): ?Ledger
     {
         $wanted = $request->integer('ledger');
@@ -269,7 +217,6 @@ class BookController extends Controller
         $from = Ledgers::date($request->string('from')->toString(), $defaultFrom);
         $to = Ledgers::date($request->string('to')->toString(), $defaultTo);
 
-        // A range typed backwards is a typo, not a reason to show nothing.
         return $from <= $to ? [$from, $to] : [$to, $from];
     }
 }

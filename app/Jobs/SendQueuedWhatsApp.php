@@ -43,6 +43,7 @@ class SendQueuedWhatsApp implements ShouldQueue
         public string $mobile,
         public string $message,
         public ?string $fileUrl = null,
+        public ?string $fileName = null,
     ) {}
 
     public function handle(): void
@@ -54,7 +55,10 @@ class SendQueuedWhatsApp implements ShouldQueue
         }
 
         try {
-            GuestMessage::markSent($delivery, WhatsApp::send($this->mobile, $this->message, $this->fileUrl));
+            GuestMessage::markSent(
+                $delivery,
+                WhatsApp::send($this->mobile, $this->message, $this->fileUrl, $this->fileName)
+            );
         } catch (Throwable $e) {
             GuestMessage::markFailed($delivery, $e->getMessage());
         }

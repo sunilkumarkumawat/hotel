@@ -7,14 +7,7 @@ use App\Models\Pos\PosRatePlan;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 
-/**
- * Rate Plan — a price list and the outlets that run it.
- *
- * A plan with no outlets ticked is a plan nobody can sell on, so the form
- * insists on at least one. The prices themselves belong to the menu item
- * screen, which is not built yet; this is the list that screen will hang its
- * columns off.
- */
+
 class RatePlanController extends SetupListController
 {
     protected function definition(): array
@@ -51,8 +44,7 @@ class RatePlanController extends SetupListController
 
     protected function afterSave(Model $row, Request $request): void
     {
-        // Only outlets this branch can actually see — a posted id from another
-        // property is dropped rather than trusted.
+
         $allowed = $this->outlets()->keys()->all();
 
         $row->outlets()->sync(

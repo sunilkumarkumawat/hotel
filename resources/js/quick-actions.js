@@ -1,0 +1,315 @@
+/*
+|------------------------------------------------------------------------------
+| Topbar Quick Actions
+|------------------------------------------------------------------------------
+| Loaded on every page — partials/topbar.blade.php's trigger button and
+| partials/quick-actions.blade.php's panel are both in layouts/app.blade.php,
+| so this has to be too, rather than living in one page's own script the way
+| reservation.js or setup-rows.js do.
+|
+| Two independent things share one search box: a client-side filter over the
+| module list already in the DOM (partials/menu-list.blade.php, the same
+| markup the sidebar uses), and a debounced server search over the guest
+| book. Picking a guest swaps the box's contents for a short list of what to
+| do with them — it does not navigate anywhere by itself.
+*/
+(function () {
+    'use strict';
+
+    const backdrop = document.querySelector('[data-quick-actions]');
+    const openButtons = document.querySelectorAll('[data-open-quick-actions]');
+
+    if (!backdrop || !openButtons.length) return;
+
+    const boot = window.QUICK_ACTIONS_BOOT || {};
+    const $ = (sel, root) => (root || document).querySelector(sel);
+    const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+    const body = $('.nv-quick-body', backdrop);
+    const query = $('[data-quick-query]', backdrop);
+    const modulesBox = $('[data-quick-modules]', backdrop);
+    const guestsBox = $('[data-quick-guests]', backdrop);
+    const guestResults = guestsBox && $('[data-quick-guest-results]', guestsBox);
+    const actionsBox = $('[data-quick-guest-actions]', backdrop);
+    const guestHead = actionsBox && $('[data-quick-guest-head]', actionsBox);
+    const actionList = actionsBox && $('[data-quick-action-list]', actionsBox);
+    const backButton = actionsBox && $('[data-quick-back]', actionsBox);
+
+    const moduleRows = modulesBox ? $$('.nv-nav-link, .nv-nav-group', modulesBox) : [];
+
+    let guestTimer = null;
+    let activeGuests = [];
+
+    // Guest name/mobile/email come back from the server as plain data, but a
+    // guest record is still free text someone typed at check-in — escaped
+    // before it goes into innerHTML so a stray "<" in a name can never be
+    // read as markup.
+    function escapeHtml(value) {
+        return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, function (ch) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+        });
+    }
+
+    /* ── Open / close ──────────────────────────────────────────────────── */
+
+    function open() {
+        backdrop.classList.add('is-open');
+
+        if (query) query.value = '';
+
+        filterModules('');
+        renderGuests([]);
+
+        // Waits for the open transition rather than fighting it for focus.
+        setTimeout(function () {
+            if (query) query.focus();
+        }, 50);
+    }
+
+    function close() {
+        backdrop.classList.remove('is-open');
+    }
+
+    openButtons.forEach((b) => b.addEventListener('click', open));
+
+    $$('[data-close-quick-actions]', backdrop).forEach((b) => b.addEventListener('click', close));
+
+    backdrop.addEventListener('click', function (event) {
+        if (event.target === backdrop) close();
+    });
+
+    document.addEventListener('keydown', function (event) {
+        const isJumpKey = (event.metaKey || event.ctrlKey) && String(event.key).toLowerCase() === 'k';
+
+        if (isJumpKey) {
+            event.preventDefault();
+
+            if (backdrop.classList.contains('is-open')) {
+                close();
+            } else {
+                open();
+            }
+
+            return;
+        }
+
+        if (event.key === 'Escape' && backdrop.classList.contains('is-open')) {
+            close();
+        }
+    });
+
+    /* ── Jump to any screen ────────────────────────────────────────────── */
+
+    function filterModules(term) {
+        term = term.trim().toLowerCase();
+
+        moduleRows.forEach(function (row) {
+            const matches = !term || row.textContent.toLowerCase().indexOf(term) > -1;
+
+            row.hidden = !matches;
+
+            // A match on a submodule's name has to open its group, or the
+            // row that actually matched stays hidden inside a closed one.
+            if (matches && term && row.classList.contains('nv-nav-group')) {
+                row.classList.add('is-open');
+
+                const toggle = row.querySelector('[data-nav-toggle]');
+
+                if (toggle) toggle.setAttribute('aria-expanded', 'true');
+            }
+        });
+    }
+
+    /* ── Guest search ──────────────────────────────────────────────────── */
+
+    function showSearchView() {
+        if (actionsBox) actionsBox.hidden = true;
+        if (modulesBox) modulesBox.hidden = false;
+        if (guestsBox) guestsBox.hidden = activeGuests.length === 0;
+    }
+
+    function showActionsView() {
+        if (actionsBox) actionsBox.hidden = false;
+        if (modulesBox) modulesBox.hidden = true;
+        if (guestsBox) guestsBox.hidden = true;
+        if (body) body.scrollTop = 0;
+    }
+
+    function renderGuests(guests) {
+        activeGuests = Array.isArray(guests) ? guests : [];
+
+        if (guestResults) {
+            guestResults.innerHTML = '';
+
+            activeGuests.forEach(function (guest) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'nv-guest-result';
+                item.innerHTML =
+                    '<span class="nv-guest-name">' + escapeHtml(guest.name) + '</span>' +
+                    '<span class="nv-guest-meta">' + escapeHtml(guest.mobile || '—') +
+                    (guest.email ? ' · ' + escapeHtml(guest.email) : '') + '</span>';
+
+                item.addEventListener('click', function () {
+                    showActionsFor(guest);
+                });
+
+                guestResults.appendChild(item);
+            });
+        }
+
+        showSearchView();
+    }
+
+    function showActionsFor(guest) {
+        if (!actionsBox || !guestHead || !actionList) return;
+
+        guestHead.innerHTML =
+            '<strong>' + escapeHtml(guest.name) + '</strong>' +
+            '<span>' + escapeHtml(guest.mobile || '—') + (guest.email ? ' · ' + escapeHtml(guest.email) : '') + '</span>';
+
+        actionList.innerHTML = '';
+
+        const actions = [
+            cloneAction('reservation', function () {
+                return boot.urls.reservationCreate + '?guest=' + encodeURIComponent(guest.id);
+            }),
+            cloneAction('profile', function () {
+                return boot.urls.guestProfile + '/' + encodeURIComponent(guest.id);
+            }),
+        ];
+
+        // Only when this guest actually has a room right now — the till has
+        // nothing to open an order against otherwise, which is exactly what
+        // active_check_in_id (added server-side in GuestController::search)
+        // is for: skip the tile rather than offer something that would 404.
+        if (guest.active_check_in_id) {
+            actions.push(cloneActionPost('room-service', boot.urls.posRoom + '/' + encodeURIComponent(guest.active_check_in_id)));
+        }
+
+        const guestName = encodeURIComponent(guest.name || '');
+        const guestMobile = encodeURIComponent(guest.mobile || '');
+
+        actions.push(
+            cloneAction('car-parking', function () {
+                return boot.urls.carParking + '?guest_name=' + guestName + '&mobile=' + guestMobile;
+            }),
+            cloneAction('hall-booking', function () {
+                return boot.urls.hallBooking + '?guest_name=' + guestName + '&mobile=' + guestMobile;
+            }),
+            cloneAction('pool-booking', function () {
+                return boot.urls.poolBooking + '?guest_name=' + guestName + '&mobile=' + guestMobile;
+            }),
+            // Not a create screen — the register is a nightly report, so this
+            // jumps to today's and pre-filters it to this guest's name rather
+            // than opening a form. A guest with no stay covering tonight (one
+            // who left already, or never stayed) legitimately shows nothing
+            // there, same as typing their name into that search box by hand.
+            cloneAction('police-register', function () {
+                return boot.urls.policeRegister + '?q=' + guestName;
+            })
+        );
+
+        actions.forEach(function (link) {
+            if (link) actionList.appendChild(link);
+        });
+
+        showActionsView();
+    }
+
+    /**
+     * A named <template> from quick-actions.blade.php, already carrying the
+     * right icon and label and already gated by whatever permission that
+     * action needs — this only ever fills in the href, never decides on its
+     * own whether an action belongs on the list.
+     */
+    function cloneAction(name, hrefFor) {
+        const tpl = $('[data-quick-action-template="' + name + '"]', backdrop);
+
+        if (!tpl) return null;
+
+        const node = tpl.content.cloneNode(true);
+        const link = node.querySelector('[data-quick-action-link]');
+
+        if (link) link.href = hrefFor();
+
+        return link;
+    }
+
+    /**
+     * Same template, but for the one action that has to be a POST — opening
+     * a room-service order changes something (it starts a bill), so it does
+     * not get to be a plain link the way jumping to a screen does. Clicking
+     * it submits a throwaway form instead of navigating by href, the same
+     * request a real "Open" button on that till would make.
+     */
+    function cloneActionPost(name, action) {
+        const tpl = $('[data-quick-action-template="' + name + '"]', backdrop);
+
+        if (!tpl) return null;
+
+        const node = tpl.content.cloneNode(true);
+        const link = node.querySelector('[data-quick-action-link]');
+
+        if (link) {
+            link.addEventListener('click', function (event) {
+                event.preventDefault();
+
+                const tokenMeta = document.querySelector('meta[name="csrf-token"]');
+                const form = document.createElement('form');
+
+                form.method = 'POST';
+                form.action = action;
+                form.style.display = 'none';
+
+                const token = document.createElement('input');
+                token.type = 'hidden';
+                token.name = '_token';
+                token.value = tokenMeta ? tokenMeta.content : '';
+                form.appendChild(token);
+
+                document.body.appendChild(form);
+                form.submit();
+            });
+        }
+
+        return link;
+    }
+
+    if (backButton) {
+        backButton.addEventListener('click', function () {
+            showSearchView();
+
+            if (query) query.focus();
+        });
+    }
+
+    if (query) {
+        query.addEventListener('input', function () {
+            const term = query.value.trim();
+
+            filterModules(term);
+
+            if (!boot.canGuestSearch || !guestsBox) return;
+
+            clearTimeout(guestTimer);
+
+            if (term.length < 2) {
+                renderGuests([]);
+
+                return;
+            }
+
+            guestTimer = setTimeout(function () {
+                fetch(boot.urls.guestSearch + '?q=' + encodeURIComponent(term), {
+                    headers: { Accept: 'application/json' },
+                })
+                    .then((r) => r.json())
+                    .then(renderGuests)
+                    .catch(function () {
+                        renderGuests([]);
+                    });
+            }, 250);
+        });
+    }
+})();

@@ -12,10 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
-/**
- * Manages the `module` and `submodule` tables — the sidebar and the user
- * permission matrix are both built from them.
- */
+
 class ModuleController extends Controller
 {
     public function index(): View
@@ -29,12 +26,6 @@ class ModuleController extends Controller
             ],
         ]);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Modules
-    |--------------------------------------------------------------------------
-    */
 
     public function storeModule(Request $request): RedirectResponse
     {
@@ -70,12 +61,6 @@ class ModuleController extends Controller
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Sub-modules
-    |--------------------------------------------------------------------------
-    */
-
     public function storeSubmodule(Request $request): RedirectResponse
     {
         $data = $this->validatedSubmodule($request);
@@ -106,16 +91,7 @@ class ModuleController extends Controller
         return back()->with('status', "Sub-module \"{$name}\" and its permissions have been removed.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * Strip deleted ids out of every user_permission row, so nobody is left
-     * holding a permission for a screen that no longer exists.
-     *
      * @param  array<int, int>  $submoduleIds
      * @param  array<int, int>  $moduleIds
      */

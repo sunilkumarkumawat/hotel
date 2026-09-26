@@ -27,6 +27,11 @@
         </span>
     @endif
 
+    <button type="button" class="nv-icon-btn" data-open-quick-actions
+            aria-label="Quick actions" title="Quick actions (Ctrl K)">
+        <x-icon name="search" />
+    </button>
+
     <div class="nv-topbar-spacer"></div>
 
     @include('partials.notification-bell')

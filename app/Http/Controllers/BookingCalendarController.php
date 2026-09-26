@@ -11,16 +11,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * Reservation Calendar — room category down the side, one column per night,
- * and two numbers in every cell:
- *
- *   green   Current booking   the guest is already in the room
- *   yellow  Advance booking   booked, not arrived yet
- *
- * Clicking either number opens Reservation Booking Details for that cell: who
- * is in house, who is due, and the two added together.
- */
 class BookingCalendarController extends Controller
 {
     private const SPANS = [7 => '7 days', 15 => '15 days', 30 => '30 days'];
@@ -53,12 +43,6 @@ class BookingCalendarController extends Controller
         ]);
     }
 
-    /**
-     * Reservation Booking Details for one cell.
-     *
-     * Current booking, advance booking, and the tally underneath — the same
-     * three blocks the old system showed.
-     */
     public function details(Request $request): View
     {
         $data = $request->validate([
@@ -89,7 +73,6 @@ class BookingCalendarController extends Controller
         ]);
     }
 
-    /** The grid as a CSV. */
     public function export(Request $request): StreamedResponse
     {
         [$start, $days] = $this->window($request);
@@ -131,16 +114,8 @@ class BookingCalendarController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
 
     /**
-     * Booking lines covering one night, in one category, with one set of
-     * statuses. Pax is the head count stored on the line.
-     *
      * @param  list<string>  $statuses
      */
     private function linesOn(string $date, ?int $category, array $statuses): Collection
@@ -150,8 +125,6 @@ class BookingCalendarController extends Controller
             ->leftJoin('room_type as rt', 'rt.id', '=', 'rr.room_type_id')
             ->where('r.branch_id', Helper::getActiveBranchId())
             ->whereIn('r.status', $statuses)
-            // Compare against the next day: a stored date can carry a
-            // 00:00:00 time, and '2026-09-08 00:00:00' is not <= '2026-09-08'.
             ->where('rr.arrival_date', '<', CarbonImmutable::parse($date)->addDay()->toDateString())
             ->where('rr.checkout_date', '>', $date)
             ->when(

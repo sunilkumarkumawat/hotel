@@ -18,10 +18,20 @@
 | dropped with it — a booking with no advance paid does not print a blank
 | "Advance received" row.
 |
+| Every event below draws with the same teal-and-gold branded template
+| (see app/Support/GuestDocument.php) — 'sections' becomes one boxed card per
+| heading, and an optional 'highlight' becomes the gold total callout, the
+| same shape the booking voucher has always had. 'badge' is the small pill in
+| the header's top-right corner; it switches itself to a red "BALANCE DUE" or
+| green "SETTLED" automatically on any event whose data carries a balance
+| (checkout, a payment, an advance) — see GuestDocument::header() — so it only
+| needs setting here for events that never carry one.
+|
 | ATTACHMENTS ONLY WORK ON A PUBLIC ADDRESS. The gateway fetches the file from
-| APP_URL, so while that is http://127.0.0.1:8000 it can reach nothing and the
-| message is sent on its own. Administration -> Notification Settings says so
-| on screen rather than leaving anybody guessing.
+| APP_URL (or PMS_PUBLIC_URL), so while that is http://127.0.0.1:8000 it can
+| reach nothing and the message is sent on its own. Administration ->
+| Notification Settings says so on screen rather than leaving anybody
+| guessing.
 */
 
 return [
@@ -64,15 +74,26 @@ return [
 
     'guest.checkin' => [
         'title' => 'Registration Slip',
+        'badge' => 'CHECKED IN',
         'reference' => '{folio_no}',
         'greeting' => 'Welcome, {guest}.',
         'lead' => 'You are checked in. This slip has your room and folio number on it — the desk '
             . 'will ask for the folio number when anything is charged to the room.',
         'sections' => [
-            'Your stay' => [
+            'Guest Details' => [
+                'Guest Name' => '{guest}',
+                'Phone' => '{guest_phone}',
+                'Email' => '{guest_email}',
+            ],
+            'Stay Details' => [
+                'Reservation No.' => '{reservation_no}',
                 'Room' => '{room}',
-                'Folio no.' => '{folio_no}',
-                'Check-out' => '{departure}',
+                'Room Type' => '{room_type}',
+                'Meal Plan' => '{meal_plan}',
+                'Guests' => '{guests}',
+                'Folio No.' => '{folio_no}',
+                'Check-in' => '{arrival}',
+                'Expected Check-out' => '{departure}',
             ],
         ],
         'note' => 'Anything at all — dial the reception from your room.',
@@ -80,17 +101,35 @@ return [
 
     'guest.checkout' => [
         'title' => 'Final Bill',
+        'badge' => 'SETTLED',
         'reference' => '{bill_no}',
         'greeting' => 'Thank you for staying with us, {guest}.',
-        'lead' => 'Here is your bill, settled in full. We hope to see you again.',
+        'lead' => 'Here is your bill. We hope to see you again.',
         'sections' => [
-            'Your stay' => [
-                'Room' => '{room}',
-                'Folio no.' => '{folio_no}',
-                'Checked out' => '{departure}',
+            'Guest Details' => [
+                'Guest Name' => '{guest}',
+                'Phone' => '{guest_phone}',
             ],
-            'Bill' => [
-                'Total' => '{amount}',
+            'Stay Details' => [
+                'Room' => '{room}',
+                'Room Type' => '{room_type}',
+                'Meal Plan' => '{meal_plan}',
+                'Folio No.' => '{folio_no}',
+                'Check-in' => '{checkin_date}',
+                'Checked out' => '{departure}',
+                'Nights' => '{nights}',
+            ],
+            'Bill Breakdown' => [
+                'Room Charges' => '{room_total}',
+                'Service Charges' => '{service_total}',
+                'Discount' => '{discount_total}',
+                'Tax' => '{tax_total}',
+            ],
+        ],
+        'highlight' => [
+            'label' => 'Total Amount',
+            'value' => '{amount}',
+            'sub' => [
                 'Paid' => '{paid}',
                 'Balance' => '{balance}',
             ],
@@ -100,14 +139,25 @@ return [
 
     'guest.payment' => [
         'title' => 'Payment Receipt',
+        'badge' => 'RECEIVED',
         'reference' => '{folio_no}',
         'greeting' => 'Thank you, {guest}.',
         'lead' => 'We have received your payment. This is your receipt.',
         'sections' => [
-            'Payment' => [
-                'Amount received' => '{amount}',
+            'Guest Details' => [
+                'Guest Name' => '{guest}',
+                'Phone' => '{guest_phone}',
+            ],
+            'Stay Details' => [
+                'Room' => '{room}',
+                'Folio No.' => '{folio_no}',
                 'Mode' => '{mode}',
-                'Folio no.' => '{folio_no}',
+            ],
+        ],
+        'highlight' => [
+            'label' => 'Amount Received',
+            'value' => '{amount}',
+            'sub' => [
                 'Balance now' => '{balance}',
             ],
         ],
@@ -115,16 +165,24 @@ return [
 
     'guest.advance' => [
         'title' => 'Advance Receipt',
+        'badge' => 'RECEIVED',
         'reference' => '{reservation_no}',
         'greeting' => 'Thank you, {guest}.',
         'lead' => 'Your advance has been received against the booking below.',
         'sections' => [
-            'Booking' => [
-                'Booking no.' => '{reservation_no}',
+            'Guest Details' => [
+                'Guest Name' => '{guest}',
+                'Phone' => '{guest_phone}',
+            ],
+            'Booking Details' => [
+                'Booking No.' => '{reservation_no}',
                 'Check-in' => '{arrival}',
             ],
-            'Payment' => [
-                'Advance received' => '{amount}',
+        ],
+        'highlight' => [
+            'label' => 'Advance Received',
+            'value' => '{amount}',
+            'sub' => [
                 'Balance' => '{balance}',
             ],
         ],
@@ -208,26 +266,35 @@ return [
 
     'guest.pos-bill' => [
         'title' => 'Restaurant Bill',
+        'badge' => 'PAID',
         'reference' => '{bill_no}',
         'greeting' => 'Thank you, {guest}.',
         'lead' => 'Here is your bill from {outlet}.',
         'sections' => [
-            'Bill' => [
+            'Bill Details' => [
+                'Guest Name' => '{guest}',
+                'Room' => '{room}',
                 'Outlet' => '{outlet}',
-                'Bill no.' => '{bill_no}',
-                'Total' => '{amount}',
+                'Bill No.' => '{bill_no}',
+                'Items' => '{items}',
             ],
+        ],
+        'highlight' => [
+            'label' => 'Total Amount',
+            'value' => '{amount}',
         ],
         'note' => 'This is a computer-generated bill and needs no signature.',
     ],
 
     'guest.pos-order' => [
         'title' => 'Order Confirmation',
+        'badge' => 'IN KITCHEN',
         'reference' => '{where}',
         'greeting' => 'Thank you, {guest}.',
         'lead' => 'Your order has been sent to the kitchen.',
         'sections' => [
-            'Order' => [
+            'Order Details' => [
+                'Guest Name' => '{guest}',
                 'Where' => '{where}',
                 'Items' => '{items}',
             ],

@@ -9,16 +9,8 @@ use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * The two statements everything else adds up to.
- *
- * Trial Balance says the books balance. Profit & Loss says whether the hotel
- * made money. Both are read straight off the ledgers with no stored totals
- * anywhere, which is why neither can drift out of step with the vouchers.
- */
 class ReportController extends Controller
 {
-    /** GET accounting/trial-balance */
     public function trialBalance(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -29,7 +21,6 @@ class ReportController extends Controller
         ]);
     }
 
-    /** GET accounting/trial-balance/export */
     public function exportTrialBalance(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -62,7 +53,6 @@ class ReportController extends Controller
         }, 'trial-balance-' . $upto . '.csv', ['Content-Type' => 'text/csv']);
     }
 
-    /** GET accounting/profit-loss */
     public function profitAndLoss(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();

@@ -183,6 +183,19 @@ return [
         'api_version' => env('WHATSAPP_API_VERSION', 'v21.0'),
         'extra' => env('WHATSAPP_EXTRA'),
         'timeout' => (int) env('WHATSAPP_TIMEOUT', 12),
+        /*
+         * Chatway only: how long to wait for send-file specifically (a
+         * message with a PDF on it), separately from WHATSAPP_TIMEOUT above,
+         * which is send-msg's own (text only). Shorter on purpose — see the
+         * long comment on WhatsApp::chatwaySendFile(). While this server is
+         * `php artisan serve` on a laptop, sending a PDF whose link points
+         * back at this same machine can take a while to be confirmed even
+         * though it still goes through, so this is kept short rather than
+         * making a booking or checkout wait on it. Raise it once this is
+         * moved onto Apache (see that same comment) and it should always
+         * answer quickly.
+         */
+        'file_timeout' => (int) env('WHATSAPP_FILE_TIMEOUT', 10),
     ],
 
 ];

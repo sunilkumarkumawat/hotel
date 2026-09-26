@@ -13,26 +13,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\View\View;
 
-/**
- * The Kitchen Display System.
- *
- * A ticket is one KOT round on one order — round two of table 7 is a ticket of
- * its own, sitting next to round one, because that is how it was cooked.
- *
- * Every ticket carries the moment it was fired as a plain epoch, and the clock
- * on screen is run by the browser from that. Two consequences, both wanted: the
- * timer keeps counting between refreshes, and a screen that has lost the network
- * goes on telling the kitchen how long the oldest ticket has been waiting
- * instead of freezing on a number from four minutes ago.
- */
 class KitchenController extends Controller
 {
-    /** GET point-of-sale/kitchen-display */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
 
-        // The same permission-aware list the till uses.
         $outlets = PosController::outlets($branchId);
         $outlet = $outlets->firstWhere('id', $request->integer('outlet'));
 
@@ -52,20 +38,10 @@ class KitchenController extends Controller
         ]);
     }
 
-    /**
-     * GET point-of-sale/kitchen-display/feed
-     *
-     * The same tickets as JSON, for the quiet refresh. It returns the board's
-     * whole state rather than a diff: a kitchen screen is a handful of tickets,
-     * and a full replace can never drift out of step with the database the way
-     * an applied diff can.
-     */
     public function feed(Request $request): JsonResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
 
-        // An outlet this user may not bill through is not one they may read
-        // tickets for either — the feed is checked, not just the picker.
         $wanted = $request->integer('outlet') ?: null;
         $allowed = PosController::outlets($branchId)->pluck('id')->all();
 
@@ -85,13 +61,6 @@ class KitchenController extends Controller
         ]);
     }
 
-    /**
-     * POST point-of-sale/kitchen-display/advance
-     *
-     * Move a ticket on: New → Preparing → Ready → Served. The whole ticket
-     * moves, because that is the unit the kitchen works in; a single line that
-     * needs holding back is a conversation, not a button.
-     */
     public function advance(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -114,18 +83,7 @@ class KitchenController extends Controller
         return back()->with('status', "{$order->where_label} · KOT {$data['kot_no']} marked {$label}.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * Every ticket the kitchen still has work on.
-     *
-     * Served tickets drop off, and so does anything on a cancelled order — a
-     * table that walked out should not still be cooking.
-     *
      * @return Collection<int, array<string, mixed>>
      */
     private function tickets(int $branchId, ?int $outletId, ?int $departmentId): Collection
@@ -159,10 +117,7 @@ class KitchenController extends Controller
                     'outlet' => $order->outlet?->name,
                     'steward' => $order->steward?->name,
                     'pax' => (int) $order->pax,
-                    // The one number the whole screen is about. An epoch, so
-                    // the browser runs the clock rather than re-asking.
                     'fired_at' => $first->fired_at?->timestamp,
-                    // A ticket is as far along as its least-advanced line.
                     'status' => $this->ticketStatus($group),
                     'lines' => $group->map(fn (PosOrderItem $line) => [
                         'id' => $line->id,
@@ -177,8 +132,6 @@ class KitchenController extends Controller
             ->sortBy('fired_at')
             ->values();
     }
-
-    /** The column a ticket belongs in. */
     private function ticketStatus(Collection $lines): string
     {
         foreach (['pending', 'preparing', 'ready'] as $status) {

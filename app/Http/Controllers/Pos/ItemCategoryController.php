@@ -8,14 +8,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
-/**
- * Item Category — the headings on a menu.
- *
- * A row is either a heading or something filed under one. Two levels is
- * deliberately the limit: Beverages → Hot Beverages is how a POS screen is
- * navigated with a thumb, and a third level would be a menu nobody can find
- * anything on.
- */
 class ItemCategoryController extends SetupListController
 {
     protected function definition(): array
@@ -62,8 +54,6 @@ class ItemCategoryController extends SetupListController
             'type' => [
                 'required',
                 Rule::in(array_keys(PosMenuCategory::TYPES)),
-                // Demoting a heading that already has rows under it would leave
-                // them pointing at something that is itself filed elsewhere.
                 function (string $attribute, mixed $value, callable $fail) use ($id) {
                     if ($id && $value === 'sub_category'
                         && PosMenuCategory::query()->where('parent_id', $id)->exists()) {
@@ -84,8 +74,6 @@ class ItemCategoryController extends SetupListController
 
     protected function beforeSave(array $data, Request $request, ?Model $row): array
     {
-        // A heading is not under anything. Clearing it here rather than trusting
-        // the form means a leftover value from a mis-click cannot survive.
         if (($data['type'] ?? 'category') === 'category') {
             $data['parent_id'] = null;
         }
@@ -105,8 +93,6 @@ class ItemCategoryController extends SetupListController
 
         return null;
     }
-
-    /** Headings a sub category may be filed under. */
     private function headings()
     {
         return PosMenuCategory::query()

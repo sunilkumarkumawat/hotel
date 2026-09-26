@@ -122,7 +122,8 @@
                                            placeholder="Basmati Rice" required />
                                 </td>
                                 <td>
-                                    <input form="item-new" name="code" class="nv-input" value="{{ old('code') }}" />
+                                    <input form="item-new" name="code" class="nv-input" value="{{ old('code') }}"
+                                           placeholder="Scan or type" title="Matched when this is scanned on a document" />
                                 </td>
                                 <td>
                                     <select form="item-new" name="store_category_id" class="nv-select">
@@ -174,7 +175,8 @@
                                     </td>
                                     <td>
                                         <input form="item-edit" name="code" class="nv-input"
-                                               value="{{ old('code', $item->code) }}" />
+                                               value="{{ old('code', $item->code) }}" placeholder="Scan or type"
+                                               title="Matched when this is scanned on a document" />
                                     </td>
                                     <td>
                                         <select form="item-edit" name="store_category_id" class="nv-select">

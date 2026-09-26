@@ -13,29 +13,9 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The four lists behind Pool, Hall and Car.
- *
- * Pools, halls, parking bays and cars are the same screen four times — a list,
- * a row of fields, add, edit, switch off — so they are written once and
- * described four times. The description below is the whole difference between
- * them, which is the point: a fifth facility is a new entry in this array and
- * nothing else.
- *
- * Nothing here is ever really deleted. A pool that has bookings against it must
- * still be nameable on last month's report, so the only "delete" is switching
- * it off, and a row that is off cannot be picked for anything new.
- */
 class FacilitySetupController extends Controller
 {
-    /**
-     * slug => everything that screen is.
-     *
-     * `fields` drives both the form and the validation: a field here appears on
-     * the screen, is validated, and is saved. Nothing else is. That is what
-     * keeps a column somebody adds later from silently becoming mass-assignable
-     * through this controller.
-     */
+
     public static function screens(): array
     {
         return [
@@ -132,7 +112,6 @@ class FacilitySetupController extends Controller
         ];
     }
 
-    /** GET pool/setup · hall/setup · car/parking-slots · car/vehicles */
     public function index(Request $request): View
     {
         $screen = $this->screen($request);
@@ -160,7 +139,6 @@ class FacilitySetupController extends Controller
         ]);
     }
 
-    /** POST — add, or save the one being edited. */
     public function save(Request $request): RedirectResponse
     {
         $screen = $this->screen($request);
@@ -175,9 +153,6 @@ class FacilitySetupController extends Controller
         foreach ($config['fields'] as $name => $field) {
             $rules[$name] = $field['rules'];
 
-            // A select's options are the only values it may hold. Building the
-            // rule from the same array the dropdown is built from means one can
-            // never drift from the other.
             if (($field['type'] ?? '') === 'select') {
                 $rules[$name] = array_merge((array) $field['rules'], [Rule::in(array_keys($field['options']))]);
             }
@@ -193,8 +168,6 @@ class FacilitySetupController extends Controller
             return back()->with('error', 'That row is not one of this branch\'s.');
         }
 
-        // Only the described fields are written — a column added to the table
-        // later cannot be set through this screen by posting its name.
         foreach (array_keys($config['fields']) as $name) {
             $row->{$name} = $data[$name] ?? null;
         }
@@ -210,7 +183,6 @@ class FacilitySetupController extends Controller
             ->with('status', ucfirst($config['singular']) . ' saved.');
     }
 
-    /** POST .../{id}/toggle — off, or back on. */
     public function toggle(Request $request, int $id): RedirectResponse
     {
         $screen = $this->screen($request);
@@ -231,19 +203,7 @@ class FacilitySetupController extends Controller
         ));
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * The three route names a screen answers to.
-     *
-     * Derived from the slug rather than stored beside it, so `pool/setup` is
-     * always `pool.setup` and there is no second list to keep in step. The
-     * routes file builds its names the same way from the same array.
-     *
      * @return array{index: string, save: string, toggle: string}
      */
     public static function routeNames(string $screen): array
@@ -252,17 +212,6 @@ class FacilitySetupController extends Controller
 
         return ['index' => $base, 'save' => $base . '.save', 'toggle' => $base . '.toggle'];
     }
-
-    /**
-     * Which of the four screens this request is.
-     *
-     * Read off the route's defaults rather than taken as a method argument.
-     * The slug carries a slash, so it cannot be a URI segment and has to be a
-     * route default — and Laravel appends defaults *after* the URI parameters
-     * when it hands them to the controller, so a method signature that put
-     * `$screen` first would silently receive the id instead. Reading it
-     * explicitly means the order of this method's arguments cannot matter.
-     */
     private function screen(Request $request): string
     {
         return (string) ($request->route()?->defaults['screen'] ?? '');
@@ -273,8 +222,6 @@ class FacilitySetupController extends Controller
     {
         $screens = self::screens();
 
-        // A route parameter that is not one of the four is a 404, not a crash:
-        // the route already constrains it, and this is the second lock.
         abort_unless(isset($screens[$screen]), 404);
 
         return $screens[$screen];

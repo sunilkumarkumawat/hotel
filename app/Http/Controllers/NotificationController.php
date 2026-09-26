@@ -15,19 +15,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * The bell, the list behind it, and the screen that decides who hears what.
- *
- * The feed is the only endpoint in the app that is polled, so it is kept
- * deliberately cheap: one indexed query, a hard limit, and nothing eager
- * loaded. It is also the only endpoint that is allowed to answer for a user
- * with no permission row of their own — a notification is not a screen, and a
- * night porter who can only see the Room Calendar still needs to be told the
- * fire panel went off.
- */
+
 class NotificationController extends Controller
 {
-    /** GET notifications — the full list. */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -54,13 +44,6 @@ class NotificationController extends Controller
         ]);
     }
 
-    /**
-     * GET notifications/feed — what the bell polls.
-     *
-     * `since` is the highest id the browser has already seen. Sending it back
-     * is what lets the browser decide which rows are *new* and therefore worth
-     * a pop-up, without the server having to remember anything per tab.
-     */
     public function feed(Request $request): JsonResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -75,7 +58,6 @@ class NotificationController extends Controller
             ->limit($limit)
             ->get(['id', 'event', 'title', 'body', 'url', 'icon', 'level', 'read_at', 'created_at']);
 
-        // One tidy-up per day at most, on whichever request happens to be first.
         if ($request->boolean('prune')) {
             Notify::prune();
         }
@@ -92,17 +74,12 @@ class NotificationController extends Controller
                 'icon' => $row->icon ?: 'bell',
                 'level' => $row->level,
                 'unread' => $row->read_at === null,
-                // Both forms: the browser shows `when`, and `at` is there for
-                // anything that wants to sort or compare without re-parsing.
                 'at' => $row->created_at?->toIso8601String(),
                 'when' => $row->created_at?->diffForHumans(),
-                // Anything at or below `since` has already been on this screen.
                 'fresh' => $since > 0 && $row->id > $since,
             ])->values(),
         ]);
     }
-
-    /** POST notifications/read — one, or all of them. */
     public function read(Request $request): RedirectResponse|JsonResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -126,13 +103,6 @@ class NotificationController extends Controller
         return back()->with('status', $marked === 1 ? 'Marked as read.' : $marked . ' marked as read.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Settings
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET notification-settings */
     public function settings(): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -157,20 +127,11 @@ class NotificationController extends Controller
                     'mail_to' => $row?->mail_to,
                     'whatsapp_to' => $row?->whatsapp_to,
                     'status' => $row ? (int) $row->status : 1,
-                    // A branch that has never opened this screen is running on
-                    // the defaults, and the screen says so rather than pretending
-                    // somebody chose them.
                     'saved' => (bool) $row,
                 ];
             })
             ->groupBy('group');
 
-        /*
-         * The PDF row belongs in the WhatsApp table rather than in a paragraph
-         * further down the page: "why did no PDF arrive?" is asked while
-         * somebody is looking at that table, not while they are reading prose.
-         * It goes in above the verdict, which stays last.
-         */
         $whatsappCheck = WhatsApp::diagnose();
         $pdfProblem = GuestDocument::unreachableBecause();
 
@@ -199,7 +160,6 @@ class NotificationController extends Controller
         ]);
     }
 
-    /** POST notification-settings */
     public function saveSettings(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -218,12 +178,6 @@ class NotificationController extends Controller
 
         $known = array_keys(config('notifications.events'));
         $saved = 0;
-
-        /*
-         * The standing recipients are saved first and on their own. They are
-         * not an event — nothing fires them — they are the answer to "who does
-         * all of this go to", which every event then adds to.
-         */
         NotificationSetting::updateOrCreate(
             ['branch_id' => $branchId, 'event' => NotificationSetting::DEFAULTS],
             [
@@ -235,9 +189,6 @@ class NotificationController extends Controller
         );
 
         foreach ($data['events'] as $event => $row) {
-            // An event that is not in the config is not something this screen
-            // can switch on — a posted key nobody recognises is ignored, not
-            // stored, so a tampered form cannot grow the table.
             if (! in_array($event, $known, true)) {
                 continue;
             }
@@ -257,14 +208,6 @@ class NotificationController extends Controller
 
         return back()->with('status', $saved . ' notification setting(s) saved.');
     }
-
-    /**
-     * POST notification-settings/test
-     *
-     * Sends one message down every channel the form asks for, whether or not
-     * the event is switched on. This is the button that answers "did I put the
-     * password in the right place" without waiting for a guest to check in.
-     */
     public function test(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -281,10 +224,6 @@ class NotificationController extends Controller
             ->body('If you are reading this, notifications are working. Sent at ' . now()->format('d M Y, h:i A') . '.')
             ->url(url('/'))
             ->force();
-
-        // Only the channel being tested is used, so testing the email side
-        // cannot leave a WhatsApp failure in the delivery log for a channel
-        // nobody was testing.
         $only = [];
 
         if (filled($data['mail_to'] ?? null)) {
@@ -313,12 +252,6 @@ class NotificationController extends Controller
             )->implode(' · '));
         }
 
-        /*
-         * The gateway's own reply is worth showing on a test even when it
-         * worked: "queued", "id 88213" or whatever it says is the proof
-         * somebody is looking for, and the next screen they would otherwise
-         * open is the delivery log to read exactly this.
-         */
         $said = $deliveries->filter(fn (NotificationDelivery $d) => filled($d->error))->map(
             fn (NotificationDelivery $d) => ucfirst($d->channel) . ': ' . $d->error
         );
@@ -326,15 +259,6 @@ class NotificationController extends Controller
         return back()->with('status', 'Test sent to ' . $deliveries->pluck('target')->implode(', ')
             . '.' . ($said->isNotEmpty() ? ' The gateway said — ' . $said->implode(' · ') : ''));
     }
-
-    /**
-     * POST notification-settings/probe
-     *
-     * "Is it my token or is it my server?" answered from the server itself,
-     * without messaging anybody: the gateway is asked to send to a number that
-     * is not a number, so it checks the account, refuses the number, and says
-     * which of the two it was unhappy about.
-     */
     public function probe(): RedirectResponse
     {
         $result = WhatsApp::probe();
@@ -346,20 +270,10 @@ class NotificationController extends Controller
         return back()->with($result['ok'] ? 'status' : 'error', $result['verdict'] . $said);
     }
 
-    /**
-     * POST notification-settings/probe-mail
-     *
-     * The same question for the mail side, and the same trick: it does
-     * everything sending does except send. Connect, start encryption, log in,
-     * hang up. Nobody is emailed, so it can be pressed as often as it takes.
-     */
     public function probeMail(): RedirectResponse
     {
         $result = Smtp::probe();
 
-        // The raw reply is only pasted on when we did not recognise the failure.
-        // A verdict that already says what to do does not need three lines of
-        // SMTP after it.
         $said = $result['raw'] !== ''
             ? ' The server said: ' . \Illuminate\Support\Str::limit($result['raw'], 300)
             : '';
@@ -367,13 +281,6 @@ class NotificationController extends Controller
         return back()->with($result['ok'] ? 'status' : 'error', $result['verdict'] . $said);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /** What to tell somebody about the mail set-up, in one sentence. */
     private function mailStatus(): string
     {
         $mailer = config('mail.default');
@@ -391,12 +298,6 @@ class NotificationController extends Controller
     }
 
     /**
-     * The mail half of the "why is nothing going out?" card.
-     *
-     * Read out of the running application rather than out of .env, on purpose:
-     * when a config cache is in place the two disagree, and it is the running
-     * value that decides whether a message leaves.
-     *
      * @return array<int, array{0: string, 1: string, 2: bool|null}>
      */
     private function mailCheck(): array
@@ -413,16 +314,6 @@ class NotificationController extends Controller
             $rows[] = ['Host', (string) (config('mail.mailers.smtp.host') ?: 'empty'), filled(config('mail.mailers.smtp.host'))];
             $rows[] = ['Port', (string) (config('mail.mailers.smtp.port') ?: 'empty'), filled(config('mail.mailers.smtp.port'))];
             $rows[] = ['Username', (string) (config('mail.mailers.smtp.username') ?: 'empty'), filled(config('mail.mailers.smtp.username'))];
-            /*
-             * The shape of the password, never the password.
-             *
-             * The sixteen-letter rule is GOOGLE'S, not this system's — nothing
-             * here has ever checked a length. So it is only mentioned when the
-             * host really is Gmail. A hotel using its own domain's mail sets
-             * whatever password it likes, and a red "fix this" against a
-             * perfectly good eleven-character password would send somebody
-             * looking for a problem that is not there.
-             */
             $gmail = Smtp::isGmail();
             $quoted = preg_match('/^[\'"].*[\'"]$/', $password) === 1;
             $appShaped = preg_match('/^[a-z]{16}$/', $password) === 1;
@@ -443,10 +334,6 @@ class NotificationController extends Controller
             $rows[] = [
                 'Password (MAIL_PASSWORD)',
                 str_repeat('•', min(16, max(1, strlen($password)))) . '  ·  ' . $shape,
-                // On any other mail server, a password that is present and not
-                // obviously mangled is as much as this screen can honestly say.
-                // Only the mail server itself knows the rest, and the button
-                // below is what asks it.
                 $password !== '' && ! $quoted && ! Smtp::looksSpaced($password)
                     && (! $gmail || $appShaped),
             ];
@@ -475,8 +362,7 @@ class NotificationController extends Controller
                 . '2-Step Verification → App passwords → Mail) or point MAIL_HOST at your own mail '
                 . 'server, where your own password works.';
         } else {
-            // Nothing here has spoken to the mail server, so nothing here can
-            // honestly call it ready.
+
             $verdict = 'Configured. Press "Check the mail server" to find out whether the mail '
                 . 'server actually accepts this password.';
         }

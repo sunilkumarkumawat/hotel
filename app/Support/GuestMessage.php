@@ -69,8 +69,13 @@ class GuestMessage
         try {
             $branchId ??= (int) Helper::getActiveBranchId();
 
-            $wantsWhatsApp = self::isOn($event, $branchId, 'whatsapp');
-            $wantsMail = self::isOn($event, $branchId, 'mail');
+            // Paused at the desk's own request, one piece at a time — see
+            // config/pms.php. A piece paused this way behaves exactly like
+            // it was switched off in Notification Settings: no delivery
+            // row, no trace. Guest WhatsApp is back on; mail and the PDF
+            // stay off until asked for.
+            $wantsWhatsApp = self::isOn($event, $branchId, 'whatsapp') && ! config('pms.guest_whatsapp_paused');
+            $wantsMail = self::isOn($event, $branchId, 'mail') && ! config('pms.guest_mail_paused');
 
             // Both switched off is a decision somebody made, so it leaves no
             // trace at all.
@@ -86,19 +91,33 @@ class GuestMessage
              * to it, email carries the bytes. Building it here rather than
              * inside each channel is what stops a guest being sent two
              * different copies of the same confirmation.
+             *
+             * Paused separately from the two channels above: while it is
+             * off, WhatsApp (or mail) still goes out, just without a PDF —
+             * the {attachment} line in the template drops itself, same as
+             * when there genuinely is nothing to send.
              */
-            $document = GuestDocument::build($event, $data, $branchId);
+            $document = config('pms.guest_pdf_paused') ? null : GuestDocument::build($event, $data, $branchId);
 
             // A link only when this installation can actually be reached from
             // the internet — see GuestDocument for why that is not always true.
+            // The .pdf on the end is not decorative: Chatway's send-file (see
+            // WhatsApp::chatwaySendFile()) is a plain GET with no header this
+            // application controls, so it can only tell the file is a PDF
+            // from the link's own extension.
             $fileUrl ??= $document && GuestDocument::reachable()
-                ? GuestDocument::base() . '/guest-doc/' . $document['token']
+                ? GuestDocument::base() . '/guest-doc/' . $document['token'] . '.pdf'
                 : null;
+
+            // What the guest sees as the saved file's name — "Booking
+            // Confirmation Voucher.pdf" reads like a real document; the bare
+            // 40-character token in the link never should.
+            $fileName = ((string) (config('guest-documents.' . $event . '.title') ?: 'Document')) . '.pdf';
 
             $sent = false;
 
             if ($wantsWhatsApp) {
-                $sent = self::whatsapp($event, $mobile, $data, $branchId, $fileUrl, $document !== null) || $sent;
+                $sent = self::whatsapp($event, $mobile, $data, $branchId, $fileUrl, $document !== null, $fileName) || $sent;
             }
 
             if ($wantsMail && $email !== '') {
@@ -132,7 +151,8 @@ class GuestMessage
         array $data,
         int $branchId,
         ?string $fileUrl,
-        bool $hasDocument
+        bool $hasDocument,
+        ?string $fileName = null
     ): bool {
         if (blank($mobile)) {
             self::markFailed(
@@ -192,7 +212,7 @@ class GuestMessage
          * this same row sent/failed the same way — from the queue instead,
          * so this method returns the moment the row is written.
          */
-        SendQueuedWhatsApp::dispatch($delivery->id, $mobile, $text, $fileUrl);
+        SendQueuedWhatsApp::dispatch($delivery->id, $mobile, $text, $fileUrl, $fileName);
 
         return true;
     }
@@ -421,11 +441,19 @@ class GuestMessage
     /**
      * The hotel's own details, available to every template.
      *
+     * Looks the branch up by the id this call was actually given rather than
+     * going straight to Helper::activeBranch() (which reads the signed-in
+     * user's session) — every caller already threads $branchId through from
+     * send()'s own parameter, so for an admin request the two agree anyway.
+     * They stop agreeing for a request with no admin session at all, which
+     * is exactly what a public website booking is: without this, a guest's
+     * confirmation would print no hotel name, phone or address at all.
+     *
      * @return array<string, string>
      */
     private static function hotel(?int $branchId): array
     {
-        $branch = Helper::activeBranch();
+        $branch = $branchId ? \App\Models\Branch\Branch::find($branchId) : Helper::activeBranch();
 
         return [
             'hotel' => (string) ($branch?->branch_name ?? config('app.name')),

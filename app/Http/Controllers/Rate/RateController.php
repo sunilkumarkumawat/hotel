@@ -16,29 +16,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule as ValidationRule;
 use Illuminate\View\View;
 
-/**
- * Setting up what rooms cost: plans, seasons and the rate grid.
- *
- * Three screens, one controller, because they are one subject and nobody sets
- * up a season without setting up the rates that use it. Each screen is a list
- * you type straight into: a row at the top for a new entry, and Edit turning a
- * row into inputs where it already sits.
- *
- * The editing is done by the server. `?edit=7` re-renders row 7 as inputs,
- * Update posts it, Cancel is a link back. One page load per edit buys a screen
- * that works with scripts blocked and shows a validation error on the exact
- * row it belongs to — which matters more here than anywhere, because a rate
- * typed into the wrong row is money.
- *
- * Nothing on these screens can change what a booking was sold at. The rate is
- * copied onto the booking when it is taken; these tables only answer "what
- * should this cost", and only when somebody asks.
- */
 class RateController extends Controller
 {
-    /* ── Plans ─────────────────────────────────────────────────────────── */
-
-    /** GET rates/plans */
     public function plans(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -58,7 +37,6 @@ class RateController extends Controller
         ]);
     }
 
-    /** POST rates/plans  ·  PUT rates/plans/{plan} */
     public function savePlan(Request $request, ?RatePlan $plan = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -77,12 +55,6 @@ class RateController extends Controller
             'status' => ['nullable', 'boolean'],
         ]);
 
-        /*
-         * A plan for one company is that company's rate. Letting it also name a
-         * market would make "which of the two decides?" a question, and the
-         * engine would have to invent an answer. It does not have to: the form
-         * refuses the combination.
-         */
         if (! empty($data['company_id']) && ! empty($data['business_market_id'])) {
             return back()->withInput()->with('error',
                 'A plan is for one company or for one market, not both. Clear one of them.');
@@ -94,7 +66,6 @@ class RateController extends Controller
 
         $plan ? $plan->update($data) : $plan = RatePlan::create($data);
 
-        // Exactly one default, enforced here rather than hoped for.
         if ($plan->is_default) {
             RatePlan::query()
                 ->forBranch($branchId)
@@ -106,7 +77,6 @@ class RateController extends Controller
         return redirect()->route('rates.plans')->with('status', 'Rate plan "' . $plan->name . '" saved.');
     }
 
-    /** DELETE rates/plans/{plan} */
     public function deletePlan(RatePlan $plan): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -124,9 +94,6 @@ class RateController extends Controller
         return redirect()->route('rates.plans')->with('status', 'Rate plan "' . $name . '" deleted.');
     }
 
-    /* ── Seasons ───────────────────────────────────────────────────────── */
-
-    /** GET rates/seasons */
     public function seasons(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -141,7 +108,6 @@ class RateController extends Controller
         ]);
     }
 
-    /** POST rates/seasons  ·  PUT rates/seasons/{season} */
     public function saveSeason(Request $request, ?RateSeason $season = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -166,7 +132,6 @@ class RateController extends Controller
         return redirect()->route('rates.seasons')->with('status', 'Season "' . $season->name . '" saved.');
     }
 
-    /** DELETE rates/seasons/{season} */
     public function deleteSeason(RateSeason $season): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -184,9 +149,6 @@ class RateController extends Controller
         return redirect()->route('rates.seasons')->with('status', 'Season "' . $name . '" deleted.');
     }
 
-    /* ── The rate grid ─────────────────────────────────────────────────── */
-
-    /** GET rates/rules */
     public function rules(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -213,7 +175,6 @@ class RateController extends Controller
         ]);
     }
 
-    /** POST rates/rules  ·  PUT rates/rules/{rule} */
     public function saveRule(Request $request, ?RateRule $rule = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -236,12 +197,6 @@ class RateController extends Controller
             'remark' => ['nullable', 'string', 'max:255'],
         ]);
 
-        /*
-         * A season and a pair of dates on the same row are two answers to one
-         * question. The engine would take the season and quietly ignore the
-         * dates, which is exactly the kind of silence that has somebody
-         * swearing at a rate sheet six months later.
-         */
         if (! empty($data['rate_season_id']) && (! empty($data['from_date']) || ! empty($data['to_date']))) {
             return back()->withInput()->with('error',
                 'A rate is dated either by naming a season or by its own dates — not both. Clear one.');
@@ -270,7 +225,6 @@ class RateController extends Controller
             ->with('status', 'Rate saved.');
     }
 
-    /** POST rates/rules/add-many — one price for several room types at once. */
     public function storeRules(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -292,11 +246,6 @@ class RateController extends Controller
                 'A rate is dated either by naming a season or by its own dates — not both. Clear one.');
         }
 
-        /*
-         * A blank price is a room type the hotel is not pricing on this plan,
-         * not a free room. Rows with nothing typed in are skipped rather than
-         * written as zero.
-         */
         $priced = array_filter(
             $data['amounts'],
             fn ($amount) => $amount !== null && $amount !== '' && (float) $amount >= 0
@@ -336,7 +285,6 @@ class RateController extends Controller
             ->with('status', $made . ' ' . \Illuminate\Support\Str::plural('rate', $made) . ' added.');
     }
 
-    /** DELETE rates/rules/{rule} */
     public function deleteRule(RateRule $rule): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -351,11 +299,6 @@ class RateController extends Controller
     /* ── Shared ────────────────────────────────────────────────────────── */
 
     /**
-     * Refuse a row that belongs to another branch.
-     *
-     * Route model binding will happily hand over any id in the table, so this
-     * is what keeps one property out of another's price list.
-     *
      * @template T of \Illuminate\Database\Eloquent\Model
      *
      * @param  T|null  $row
@@ -372,13 +315,6 @@ class RateController extends Controller
         return null;
     }
 
-    /**
-     * GET rates/quote — what a stay should cost, as JSON.
-     *
-     * The booking screen asks this the moment it knows a room type and two
-     * dates. It is the same engine the rate calendar draws, so the price a
-     * clerk is offered and the price on the calendar cannot disagree.
-     */
     public function quote(Request $request)
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -407,8 +343,6 @@ class RateController extends Controller
             'plan_id' => $quote['plan_id'],
             'sellable' => $quote['sellable'],
             'warnings' => $quote['warnings'],
-            // The per-night breakdown, so the screen can show why the average
-            // is not a round number.
             'breakdown' => array_map(fn (array $n) => [
                 'label' => $n['label'],
                 'amount' => $n['amount'],

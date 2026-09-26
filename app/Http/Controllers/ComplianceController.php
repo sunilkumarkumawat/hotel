@@ -16,27 +16,10 @@ use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * The paperwork the hotel owes to somebody other than the guest.
- *
- * Four screens, four different authorities, and no shared workflow between
- * them — so they share a controller only because they share a subject, and
- * each method reads as its own small program.
- *
- * Every number on the GST and Tally screens is read from bills as they were
- * issued. Nothing here recalculates tax: a return that disagreed with the
- * invoice a guest is holding would be the worst possible outcome, and the
- * whole point of a compliance screen is that it reports rather than decides.
- */
+
 class ComplianceController extends Controller
 {
-    /*
-    |--------------------------------------------------------------------------
-    | Form C
-    |--------------------------------------------------------------------------
-    */
 
-    /** GET compliance/form-c */
     public function formC(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -56,7 +39,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /** GET compliance/form-c/{checkIn}/new */
     public function formCCreate(Request $request, CheckIn $checkIn): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -79,7 +61,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /** POST compliance/form-c/{checkIn} */
     public function formCStore(Request $request, CheckIn $checkIn): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -123,18 +104,11 @@ class ComplianceController extends Controller
         $data['check_in_pax_id'] = $data['check_in_pax_id'] ?: null;
         $data['created_by'] = $request->user()?->user_id;
 
-        /*
-         * One form per person per stay, so a second save updates the first
-         * rather than filing the same guest twice. The database has a unique
-         * key on the pair as well — a double-submitted form is a real thing.
-         */
         $entry = FormCEntry::updateOrCreate(
             ['check_in_id' => $checkIn->id, 'check_in_pax_id' => $data['check_in_pax_id']],
             $data
         );
 
-        // The stay is a foreign guest's; record that so the register and the
-        // pending list stop having to work it out.
         if (! $checkIn->is_foreign) {
             $checkIn->update([
                 'is_foreign' => true,
@@ -147,7 +121,6 @@ class ComplianceController extends Controller
             ->with('status', 'Form C saved for ' . $entry->name . '. Print it, or file it and record the reference.');
     }
 
-    /** POST compliance/form-c/{entry}/filed — record that it actually went. */
     public function formCFiled(Request $request, FormCEntry $entry): RedirectResponse
     {
         abort_unless((int) $entry->branch_id === (int) Helper::getActiveBranchId(), 404);
@@ -164,7 +137,6 @@ class ComplianceController extends Controller
         return back()->with('status', 'Marked as filed' . ($entry->reference_no ? ' — ' . $entry->reference_no : '') . '.');
     }
 
-    /** GET compliance/form-c/{entry}/print */
     public function formCPrint(FormCEntry $entry): View
     {
         abort_unless((int) $entry->branch_id === (int) Helper::getActiveBranchId(), 404);
@@ -176,13 +148,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | The police register
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET compliance/police-register */
     public function police(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -204,7 +169,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /** GET compliance/police-register/export */
     public function policeExport(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -215,12 +179,6 @@ class ComplianceController extends Controller
             'q' => $request->string('q')->toString() ?: null,
         ]);
 
-        /*
-         * The export carries FULL ID numbers, and only somebody with the
-         * reveal permission may take it. A masked CSV would be useless to the
-         * station and a full one in the wrong hands is the worst thing in this
-         * whole system, so the line is drawn here rather than in the view.
-         */
         abort_unless(can_do('compliance/police-register', 'delete'), 403,
             'Full ID numbers need the Delete permission on this screen.');
 
@@ -245,7 +203,6 @@ class ComplianceController extends Controller
         }, 'police-register-' . $date . '.csv', ['Content-Type' => 'text/csv']);
     }
 
-    /** GET compliance/police-register/print */
     public function policePrint(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -262,13 +219,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | GST
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET compliance/gst-returns */
     public function gst(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -289,8 +239,6 @@ class ComplianceController extends Controller
             'states' => Gst::STATES,
         ]);
     }
-
-    /** GET compliance/gst-returns/export/{table} */
     public function gstExport(Request $request, string $table): StreamedResponse
     {
         abort_unless(in_array($table, ['b2b', 'b2cl', 'b2cs', 'hsn'], true), 404);
@@ -318,7 +266,6 @@ class ComplianceController extends Controller
         }, $name, ['Content-Type' => 'text/csv']);
     }
 
-    /** One line per invoice per rate — the shape both B2B and B2CL take. */
     private function writeInvoices($out, $rows, bool $withGstin): void
     {
         fputcsv($out, array_filter([
@@ -379,13 +326,6 @@ class ComplianceController extends Controller
         }
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Tally
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET compliance/tally-export */
     public function tally(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -404,7 +344,6 @@ class ComplianceController extends Controller
         ]);
     }
 
-    /** GET compliance/tally-export/download */
     public function tallyDownload(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -420,13 +359,6 @@ class ComplianceController extends Controller
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Shared
-    |--------------------------------------------------------------------------
-    */
-
-    /** A date from the query string, or today if it is missing or rubbish. */
     private function dateFrom(Request $request, string $key): string
     {
         return rescue(
@@ -437,27 +369,12 @@ class ComplianceController extends Controller
     }
 
     /**
-     * The month a return or an export covers.
-     *
-     * Defaults to LAST month, not this one. A GST return is filed for a month
-     * that has finished, so opening the screen on the 8th and finding this
-     * month's three invoices would be the wrong answer nine times in ten.
-     *
      * @return array{0: string, 1: string}
      */
     private function monthFrom(Request $request): array
     {
         $month = $request->string('month')->toString();
 
-        /*
-         * An empty string is not malformed input to hand to the parser and
-         * hope it fails safely — `CarbonImmutable::parse('-01')` does not
-         * throw, it just quietly resolves to the Unix epoch, so `rescue()`
-         * never gets a chance to catch anything and the default month a
-         * fresh screen is supposed to open on came out as December 1969.
-         * The empty case is checked for directly instead of trusted to an
-         * exception that was never going to be thrown.
-         */
         $lastMonth = fn () => CarbonImmutable::parse(today()->toDateString())->subMonth()->startOfMonth();
 
         $start = $month === ''

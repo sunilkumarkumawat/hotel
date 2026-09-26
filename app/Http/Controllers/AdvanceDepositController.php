@@ -16,17 +16,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Advance Deposit Details — money taken before or during a stay.
- *
- * The form on top records a receipt or a refund against a booking; the table
- * underneath is everything taken so far. Each save re-adds that booking's
- * deposits so `reservations.advance_paid` and the balance on the reservation
- * screen stay right.
- */
 class AdvanceDepositController extends Controller
 {
-    /** Which list the Guest Name picker offers. */
     public const GUEST_SOURCES = [
         'advance' => 'Advance booking (not arrived)',
         'in_house' => 'In house (checked in)',
@@ -53,8 +44,6 @@ class AdvanceDepositController extends Controller
             ->paginate($request->integer('per_page', 10) ?: 10)
             ->withQueryString();
 
-        // Cloned from the same filtered query as the list above, so the totals
-        // on the cards can never disagree with what the table is showing.
         $totals = (clone $base)
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'refund' THEN 0 ELSE amount END), 0) AS received")
             ->selectRaw("COALESCE(SUM(CASE WHEN type = 'refund' THEN amount ELSE 0 END), 0) AS refunded")
@@ -104,8 +93,13 @@ class AdvanceDepositController extends Controller
             GuestMessage::send('guest.advance', $reservation->mobile, [
                 'guest' => $reservation->guest_name,
                 'guest_email' => $reservation->email,
+                'guest_phone' => $reservation->mobile,
                 'reservation_no' => $reservation->reservation_no,
+                'arrival' => $reservation->rooms->isNotEmpty()
+                    ? \Illuminate\Support\Carbon::parse($reservation->rooms->min('arrival_date'))->format('d M Y')
+                    : null,
                 'amount' => '₹ ' . number_format((float) $data['amount'], 2),
+                'balance' => $reservation->balance > 0 ? '₹ ' . number_format((float) $reservation->balance, 2) : null,
             ], $reservation->branch_id);
 
             Notify::event('reservation.deposit')
@@ -136,7 +130,6 @@ class AdvanceDepositController extends Controller
 
             $deposit->update($this->attributes($data) + ['reservation_id' => $reservation->id]);
 
-            // Moving a deposit to another booking has to fix both of them.
             if ($previous && $previous->id !== $reservation->id) {
                 $previous->refreshAdvancePaid();
             }
@@ -163,10 +156,6 @@ class AdvanceDepositController extends Controller
 
         return back()->with('status', "Entry of ₹{$amount} removed.");
     }
-
-    /**
-     * Bookings the Guest Name picker can offer, filtered by the Guest list.
-     */
     public function guests(Request $request): JsonResponse
     {
         $source = $request->string('source')->toString();
@@ -177,9 +166,6 @@ class AdvanceDepositController extends Controller
             default => ['confirmed', 'tentative', 'checked_in'],
         };
 
-        // A deposit being edited may sit on a booking that has since checked
-        // out; keep it in the list so opening the form cannot quietly move
-        // the money to whichever booking happens to be first.
         $keep = $request->integer('include');
 
         $bookings = Reservation::query()
@@ -200,19 +186,6 @@ class AdvanceDepositController extends Controller
         ]));
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * The rows a branch's filters select.
-     *
-     * Shared by the list and the totals cards — cloned for each rather than
-     * built twice, so a filter added here can never end up applied to one and
-     * forgotten on the other.
-     */
     private function filtered(int $branchId, array $filters): Builder
     {
         return AdvanceDeposit::query()
@@ -239,7 +212,6 @@ class AdvanceDepositController extends Controller
         return $reservation;
     }
 
-    /** The row being edited, when ?edit=<id> points at one of ours. */
     private function editing(Request $request, int $branchId): ?AdvanceDeposit
     {
         if (! $request->filled('edit')) {
@@ -265,7 +237,6 @@ class AdvanceDepositController extends Controller
             'amount' => 'required|numeric|min:0.01|max:99999999',
             'card_type' => ['nullable', Rule::in(array_keys(AdvanceDeposit::CARD_TYPES))],
             'card_name' => 'nullable|string|max:255',
-            // Four digits only — see the migration for why.
             'card_last4' => 'nullable|digits:4',
             'pan_no' => ['nullable', 'regex:/^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/'],
             'reference_no' => 'nullable|string|max:60',
@@ -277,7 +248,6 @@ class AdvanceDepositController extends Controller
             'amount.min' => 'Enter an amount greater than zero.',
         ]);
 
-        // Card details only make sense for a card payment.
         if (! in_array($data['pay_type'], AdvanceDeposit::CARD_TYPES_NEED_CARD, true)) {
             $data['card_type'] = null;
             $data['card_name'] = null;
@@ -307,12 +277,6 @@ class AdvanceDepositController extends Controller
         ];
     }
 
-    /**
-     * You cannot hand back more than the guest has given you.
-     *
-     * On an edit, the row being changed is taken out of the running total
-     * first, otherwise raising an existing refund would always look too big.
-     */
     private function refundGuard(Reservation $reservation, array $data, ?AdvanceDeposit $ignore = null): ?string
     {
         if ($data['type'] !== 'refund') {

@@ -14,21 +14,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
-/**
- * Issue House Keeping — the linen going out to the laundry.
- *
- * One note, one vendor, one day, as many kinds of linen as the van holds. The
- * note is what both sides sign, so it stores what it was priced at rather than
- * reading the item master again months later.
- *
- * Prev Qty on each line is what this vendor was already holding of that item
- * when the note was written (see App\Support\Laundry). It is stored on the
- * line, not recomputed on the way back out: a receipt entered next Tuesday
- * must not quietly rewrite a note the laundry already has a copy of.
- */
+
 class HkIssueController extends Controller
 {
-    /** GET house-keeping/issue */
     public function index(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
@@ -69,15 +57,9 @@ class HkIssueController extends Controller
         ]);
     }
 
-    /** GET house-keeping/issue/new */
     public function create(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
-
-        // What the grid starts with: whatever a failed save is bringing back,
-        // or one empty line. Rendered by the server so the screen still works
-        // with no JavaScript, and so nothing typed is lost on a validation
-        // error.
         $rows = array_values((array) old('lines', [[]]));
 
         return view('house-keeping.issue-form', [
@@ -90,12 +72,6 @@ class HkIssueController extends Controller
         ]);
     }
 
-    /**
-     * GET house-keeping/issue/pending?vendor=<id>
-     *
-     * What this vendor is already holding — fills the Prev Qty column the
-     * moment a vendor is picked, without a page reload.
-     */
     public function pending(Request $request): JsonResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -105,7 +81,6 @@ class HkIssueController extends Controller
         ]);
     }
 
-    /** POST house-keeping/issue */
     public function store(Request $request): RedirectResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -142,13 +117,6 @@ class HkIssueController extends Controller
         if ($lines === []) {
             return back()->withInput()->with('error', 'Every line is empty — pick an item and enter a quantity.');
         }
-
-        /*
-         * `(branch_id, issue_no)` is unique, so if two clerks save at the same
-         * instant one of them loses the race and gets a duplicate-key error.
-         * Retrying reads the next free number — nobody sees a 500 page, and no
-         * two notes can ever share a number.
-         */
         $issue = retry(3, fn () => DB::transaction(function () use ($branchId, $data, $lines, $request) {
             $issue = HkIssue::create([
                 'branch_id' => $branchId,
@@ -180,7 +148,6 @@ class HkIssueController extends Controller
             ));
     }
 
-    /** GET house-keeping/issue/{issue} */
     public function show(HkIssue $issue): View
     {
         abort_unless($issue->branch_id === Helper::getActiveBranchId(), 404);
@@ -189,8 +156,6 @@ class HkIssueController extends Controller
 
         return view('house-keeping.issue-show', ['issue' => $issue]);
     }
-
-    /** DELETE house-keeping/issue/{issue} */
     public function destroy(HkIssue $issue): RedirectResponse
     {
         abort_unless($issue->branch_id === Helper::getActiveBranchId(), 404);
@@ -204,16 +169,6 @@ class HkIssueController extends Controller
 
         return back()->with('status', "{$number} deleted. Those pieces are off the vendor's list again.");
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Quick add — the two lists this screen needs
-    |--------------------------------------------------------------------------
-    | Linen and laundries are only ever set up while writing a note, so they
-    | are added from here rather than from a master screen nobody would visit.
-    */
-
-    /** POST house-keeping/issue/item */
     public function storeItem(Request $request): RedirectResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -243,7 +198,6 @@ class HkIssueController extends Controller
         return back()->with('status', "{$data['name']} added. Pick it in the Item column.");
     }
 
-    /** POST house-keeping/issue/vendor */
     public function storeVendor(Request $request): RedirectResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -266,26 +220,7 @@ class HkIssueController extends Controller
         return back()->with('status', "{$data['name']} added. Pick them in Vendor.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * Keep the lines that actually say something, and price them here.
-     *
-     * The browser fills the Amount column as the clerk types, but nothing the
-     * browser sends is trusted: every figure is worked out again from the
-     * quantities and rates, so a tampered form cannot change what the note
-     * says it is worth.
-     *
-     * One item may appear only once. Two lines for the same item would each
-     * show the same Prev Qty and read as a double count, and quietly adding
-     * them together would have to pick one of the two rates and silently
-     * reprice the other — so the note is refused and the clerk is told which
-     * item to merge.
-     *
      * @return array{0: list<array<string, mixed>>, 1: list<string>}
      */
     private function cleanLines(array $rows, $items, $pending): array
@@ -347,12 +282,6 @@ class HkIssueController extends Controller
         return Vendor::query()->forBranch($branchId)->active()->orderBy('name')->get();
     }
 
-    /**
-     * "This id is one of ours."
-     *
-     * A branch must not be able to post a note against another property's
-     * laundry just by editing the number in the form.
-     */
     private function belongsToBranch(string $table, int $branchId): \Closure
     {
         return function (string $attribute, $value, \Closure $fail) use ($table, $branchId) {

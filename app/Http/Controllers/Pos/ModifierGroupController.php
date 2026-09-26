@@ -6,16 +6,7 @@ use App\Models\Pos\PosModifier;
 use App\Models\Pos\PosModifierGroup;
 use Illuminate\Database\Eloquent\Model;
 
-/**
- * Modifier Groups — the questions a dish can ask when it is added: Size,
- * Toppings, Spice Level. The answers themselves live on the Modifiers screen,
- * which points back here the same way an Item points at its Category.
- *
- * A group is not deletable while it still has modifiers under it — the guard
- * is not correctness (a deleted group simply stops being offered) but
- * courtesy: a group emptied out from under its own answers is a confusing
- * thing to find on the Modifiers screen afterwards.
- */
+
 class ModifierGroupController extends SetupListController
 {
     protected function definition(): array

@@ -27,6 +27,7 @@
             'id' => (int) $i->id,
             'name' => $i->name,
             'unit' => $i->unit,
+            'code' => $i->code,
             'rate' => (float) $i->avg_rate,
             'last' => (float) $i->last_rate,
             'tax' => (float) $i->tax_percent,
@@ -169,6 +170,26 @@
         {{-- ── The lines ─────────────────────────────────────────────────── --}}
         <div class="nv-mt">
             <x-card title="Items" :flush="true">
+                <div class="nv-st-scan">
+                    {{--
+                        A scanner is a keyboard as far as the browser knows —
+                        it types the code and finishes with Enter. The form
+                        below already submits the whole document, so Enter
+                        here is caught by store-lines.js instead of posting
+                        early; it drops the code into an empty line, or adds
+                        one, and leaves the quantity box focused.
+
+                        Plain nv-input rather than the .nv-field-search +
+                        icon pairing used elsewhere — that icon's sizing is
+                        scoped to ".nv-toolbar"/".nv-till-find" in app.css, and
+                        this card is neither, so borrowing it here would draw
+                        an unstyled, full-size icon instead of a small one.
+                    --}}
+                    <input type="text" class="nv-input" data-barcode-scan placeholder="Scan a barcode…"
+                           aria-label="Scan a barcode" autocomplete="off" style="max-width:320px" />
+                    <span class="nv-sub" data-barcode-msg></span>
+                </div>
+
                 <div class="nv-table-wrap">
                     <table class="nv-table nv-st-lines" data-lines>
                         <thead>
@@ -193,7 +214,7 @@
                                             @foreach ($items as $item)
                                                 <option value="{{ $item->id }}"
                                                         @selected(($row['store_item_id'] ?? null) == $item->id)>
-                                                    {{ $item->name }} ({{ $item->unit }})
+                                                    {{ $item->name }} ({{ $item->unit }}){{ $item->code ? ' · ' . $item->code : '' }}
                                                 </option>
                                             @endforeach
                                         </select>
@@ -232,7 +253,9 @@
                             <select name="lines[__i__][store_item_id]" class="nv-select" data-item>
                                 <option value="">Choose an item…</option>
                                 @foreach ($items as $item)
-                                    <option value="{{ $item->id }}">{{ $item->name }} ({{ $item->unit }})</option>
+                                    <option value="{{ $item->id }}">
+                                        {{ $item->name }} ({{ $item->unit }}){{ $item->code ? ' · ' . $item->code : '' }}
+                                    </option>
                                 @endforeach
                             </select>
                             <span class="nv-st-stock" data-stock></span>

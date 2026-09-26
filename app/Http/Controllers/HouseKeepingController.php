@@ -14,21 +14,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * House Keeping Status — the supervisor's list.
- *
- * Tick rooms, pick what to do with them, press Update. The three jobs are
- * setting a room's state, giving rooms to a housekeeper, and taking them back
- * — all of them in bulk, because a supervisor allots a floor at a time, not a
- * room at a time.
- *
- * The state a room is *in* (occupied, reserved, blocked) is worked out here
- * the same way the Room Calendar does it, so the two screens can never
- * disagree about whether 203 is free.
- */
 class HouseKeepingController extends Controller
 {
-    /** What Update can do. */
     public const ACTIONS = [
         'status' => 'Set Status',
         'assign' => 'Assign Housekeeper',
@@ -58,7 +45,6 @@ class HouseKeepingController extends Controller
 
         $occupancy = $this->occupancy($rooms, $date, $branchId);
 
-        // "Dirty rooms only" is the list the supervisor actually works from.
         if ($request->boolean('to_do')) {
             $rooms = $rooms->filter(
                 fn (Room $room) => in_array($room->housekeeping_status, ['dirty', 'touch_up'], true)
@@ -89,18 +75,12 @@ class HouseKeepingController extends Controller
         ]);
     }
 
-    /**
-     * Update — one of the three jobs, applied to every ticked room.
-     */
     public function update(Request $request): RedirectResponse
     {
         $data = $request->validate([
             'action' => ['required', Rule::in(array_keys(self::ACTIONS))],
             'rooms' => 'required|array|min:1',
             'rooms.*' => 'integer',
-            // `nullable` before the list matters: the other two actions still
-            // submit this field, empty, and Rule::in would reject '' with a
-            // message about a status the clerk never touched.
             'housekeeping_status' => [
                 'required_if:action,status',
                 'nullable',
@@ -128,8 +108,6 @@ class HouseKeepingController extends Controller
             return back()->with('error', 'None of those rooms are in this branch.');
         }
 
-        // A room out of service is held by a block, not by housekeeping; the
-        // supervisor cannot quietly mark it clean and put it back on sale.
         $blocked = $rooms->where('housekeeping_status', 'out_of_order');
 
         if ($data['action'] === 'status' && $blocked->isNotEmpty()) {
@@ -182,20 +160,6 @@ class HouseKeepingController extends Controller
 
         return back()->with('status', $message);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * Who can be given rooms.
-     *
-     * Everybody active in the branch: a small hotel's manager cleans rooms
-     * too, and a "housekeeper" role the customer has not set up would leave
-     * this list empty with no way to tell why.
-     */
     private function housekeepers(int $branchId)
     {
         return User::query()
@@ -206,11 +170,6 @@ class HouseKeepingController extends Controller
     }
 
     /**
-     * Who is in each room, and whether it can be sold.
-     *
-     * Same date rule as everywhere else — written as "< tomorrow" because a
-     * date column can come back with a 00:00:00 time attached.
-     *
      * @return array<int, array{pax: int, guest: ?string, state: string}>
      */
     private function occupancy($rooms, string $date, int $branchId): array

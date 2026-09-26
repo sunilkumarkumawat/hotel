@@ -13,21 +13,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * What the store keeps, and what it is worth.
- *
- * A list you type straight into: the top row adds, and Edit turns a row into
- * inputs where it already sits. The quantity column is NOT editable — stock
- * moves through documents, never by somebody typing a new number over the old
- * one, or the ledger would stop being able to explain the balance.
- *
- * The one exception is the opening quantity, which is what a store starts with
- * on the day it is set up. It is a property of the item rather than a
- * movement, and it is the first number in every rebuild.
- */
 class ItemController extends Controller
 {
-    /** GET store/items */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -61,7 +48,6 @@ class ItemController extends Controller
         ]);
     }
 
-    /** POST store/items  ·  PUT store/items/{item} */
     public function save(Request $request, ?StoreItem $item = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -74,7 +60,14 @@ class ItemController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'code' => ['nullable', 'string', 'max:40'],
+            'code' => [
+                'nullable', 'string', 'max:40',
+                Rule::unique('store_items', 'code')
+                    ->where(fn ($q) => $q->where(fn ($inner) => $inner
+                        ->whereNull('branch_id')
+                        ->orWhere('branch_id', $branchId)))
+                    ->ignore($item?->id),
+            ],
             'store_category_id' => ['nullable', 'integer', Rule::exists('store_categories', 'id')],
             'unit' => ['required', 'string', 'max:20'],
             'reorder_level' => ['nullable', 'numeric', 'min:0', 'max:9999999'],
@@ -94,13 +87,6 @@ class ItemController extends Controller
                 || (float) $item->opening_rate !== (float) ($data['opening_rate'] ?? 0);
 
             $item->update($data);
-
-            /*
-             * Changing the opening balance changes every balance after it, so
-             * the ledger is replayed rather than patched. This is the only
-             * screen that can move a quantity without posting a document, and
-             * it is why rebuild() exists.
-             */
             if ($openingChanged) {
                 Store::rebuild($item->id);
 
@@ -112,7 +98,6 @@ class ItemController extends Controller
         } else {
             $item = StoreItem::create($data);
 
-            // A new item's opening balance is its first balance, full stop.
             if ((float) $item->opening_qty > 0) {
                 $item->update([
                     'current_qty' => $item->opening_qty,
@@ -125,18 +110,10 @@ class ItemController extends Controller
         return redirect()->route('store.items')->with('status', $item->name . ' saved.');
     }
 
-    /** DELETE store/items/{item} */
     public function destroy(StoreItem $item): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
         abort_unless($item->branch_id === null || (int) $item->branch_id === $branchId, 404);
-
-        /*
-         * An item with movements is history. Deleting it would leave ledger
-         * rows pointing at nothing and a valuation nobody could explain, so
-         * the answer is to switch it off instead — which takes it out of every
-         * dropdown and leaves the books intact.
-         */
         if (DB::table('stock_ledger')->where('store_item_id', $item->id)->exists()) {
             $item->update(['status' => 0]);
 
@@ -151,9 +128,6 @@ class ItemController extends Controller
         return redirect()->route('store.items')->with('status', $name . ' deleted.');
     }
 
-    /* ── Categories ────────────────────────────────────────────────────── */
-
-    /** GET store/categories */
     public function categories(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -169,7 +143,6 @@ class ItemController extends Controller
         ]);
     }
 
-    /** POST store/categories  ·  PUT store/categories/{category} */
     public function saveCategory(Request $request, ?StoreCategory $category = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -195,7 +168,6 @@ class ItemController extends Controller
         return redirect()->route('store.categories')->with('status', 'Saved.');
     }
 
-    /** DELETE store/categories/{category} */
     public function deleteCategory(StoreCategory $category): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();

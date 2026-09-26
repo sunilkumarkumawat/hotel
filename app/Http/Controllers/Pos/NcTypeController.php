@@ -4,18 +4,7 @@ namespace App\Http\Controllers\Pos;
 
 use App\Models\Pos\PosNcType;
 
-/**
- * NC Types — the named reasons food goes out without being paid for.
- *
- * Complimentary, In-House, Day Vacation, Promotional. None of it is theft, but
- * all of it has to be named, or the difference between hospitality and leakage
- * stops being visible on any report.
- *
- * `requires_department` is the second question: an in-house meal belongs to
- * somebody's cost centre, a promotional plate to marketing's. Ticking it here
- * makes the POS screen insist on an answer at the moment the comp is given,
- * which is the only moment anybody actually knows it.
- */
+
 class NcTypeController extends SetupListController
 {
     protected function definition(): array

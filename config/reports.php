@@ -61,6 +61,13 @@ return [
             'about' => 'Everyone who stayed between two dates — the list a marketing letter is written from.',
             'filters' => ['range'],
         ],
+        'check-in-out' => [
+            'label' => 'Check In / Check Out',
+            'group' => 'front-desk',
+            'icon' => 'calendar',
+            'about' => 'Every arrival and departure — who booked it, who checked them in, and what is still owed.',
+            'filters' => ['range', 'room_type', 'status', 'payment_status', 'booking_source', 'staff'],
+        ],
         'cancellations' => [
             'label' => 'Cancellations',
             'group' => 'front-desk',

@@ -30,6 +30,7 @@ use App\Http\Controllers\HkIssueController;
 use App\Http\Controllers\HkReceivedController;
 use App\Http\Controllers\HouseKeepingController;
 use App\Http\Controllers\HousekeepingBoardController;
+use App\Http\Controllers\ManifestController;
 use App\Http\Controllers\MasterController;
 use App\Http\Controllers\ModuleController;
 use App\Http\Controllers\MonthlyCalendarController;
@@ -89,7 +90,11 @@ Route::post('logout', [LoginController::class, 'logout'])->name('logout')->middl
 | stands in for a login: nothing to guess and nothing to count up through.
 */
 Route::get('guest-doc/{token}', [GuestDocumentController::class, 'show'])
-    ->where('token', '[A-Za-z0-9]{40}')
+    // The trailing .pdf is optional and ignored by the lookup — it exists
+    // only so the link can be given a real file extension when something
+    // fetching it decides what a file is by looking at the URL rather than
+    // its Content-Type header. See the note in GuestDocumentController.
+    ->where('token', '[A-Za-z0-9]{40}(?:\.pdf)?')
     ->name('guest-doc');
 
 /*
@@ -123,6 +128,15 @@ Route::prefix('order/{table}/{code}')
             Route::get('poll', [GuestOrderController::class, 'poll'])->name('guest-order.poll');
         });
     });
+
+/*
+ * "Add to Home Screen" — a phone fetches this the moment the page loads,
+ * login screen included, long before there is a session to be signed in
+ * with. Carries nothing but this installation's own name, colours and icon
+ * (see ManifestController), so it belongs out here with the other routes
+ * that ask for no account.
+ */
+Route::get('manifest.webmanifest', [ManifestController::class, 'show'])->name('manifest');
 
 /*
 |--------------------------------------------------------------------------
@@ -329,6 +343,8 @@ Route::middleware('auth')->group(function () {
         Route::get('order/{order}', [PosController::class, 'order'])->name('pos.order')
             ->middleware('permission:point-of-sale/pos,view');
         Route::post('order/{order}/item', [PosController::class, 'addItem'])->name('pos.order.item')
+            ->middleware('permission:point-of-sale/pos,add');
+        Route::post('order/{order}/barcode', [PosController::class, 'scanItem'])->name('pos.order.barcode')
             ->middleware('permission:point-of-sale/pos,add');
         Route::put('order/{order}/item/{line}', [PosController::class, 'updateItem'])->name('pos.order.item.update')
             ->middleware('permission:point-of-sale/pos,edit');
@@ -831,6 +847,11 @@ Route::middleware('auth')->group(function () {
         ->group(function () {
             Route::get('guests', 'index')->name('guests')
                 ->middleware('permission:crm/guests,view');
+            // Ahead of guests/{guest} on purpose — {guest} is numeric-only
+            // (whereNumber above) so the order can't actually cause a
+            // mismatch, but a literal path reads clearer coming first.
+            Route::get('guests/search', 'search')->name('guests.search')
+                ->middleware('permission:crm/guests,view');
             Route::get('guests/{guest}', 'show')->name('guests.show')
                 ->middleware('permission:crm/guests,view');
 
@@ -1027,6 +1048,227 @@ Route::middleware('auth')->group(function () {
             Route::get('check-out-guest/bill/{bill}', 'invoice')->name('.invoice')
                 ->middleware('permission:front-office/check-out-guest,view');
         });
+
+    /*
+     * TEMP DIAGNOSTIC — read-only. Why the whole app has gotten slow since
+     * yesterday's work: PHP-level settings that affect every single request
+     * (opcache, xdebug), how big the tables everything queries have grown,
+     * how many files are sitting in storage/, and real timings on a couple of
+     * queries that run on nearly every page. Remove once this is understood.
+     */
+    Route::get('diag/perf', function () {
+        $t0 = microtime(true);
+
+        $opcache = function_exists('opcache_get_status') ? @opcache_get_status(false) : null;
+
+        $countFiles = function (string $dir): int|string {
+            if (! is_dir($dir)) {
+                return 'no such folder';
+            }
+
+            try {
+                $n = 0;
+                foreach (new \FilesystemIterator($dir, \FilesystemIterator::SKIP_DOTS) as $f) {
+                    $n++;
+                }
+
+                return $n;
+            } catch (\Throwable $e) {
+                return 'error: ' . $e->getMessage();
+            }
+        };
+
+        $tables = [
+            'check_ins', 'folio_charges', 'reservations', 'reservation_rooms', 'bills', 'settlements',
+            'pos_orders', 'pos_order_items', 'pos_order_item_modifiers', 'pos_invoices',
+            'app_notifications', 'notification_deliveries', 'activity_logs',
+            'stock_ledger_entries', 'store_docs', 'store_doc_items', 'rooms', 'guests', 'users',
+        ];
+
+        $counts = [];
+
+        foreach ($tables as $table) {
+            try {
+                $counts[$table] = \Illuminate\Support\Facades\DB::table($table)->count();
+            } catch (\Throwable $e) {
+                $counts[$table] = 'error: ' . $e->getMessage();
+            }
+        }
+
+        $timings = [];
+
+        // Each one stands alone — a bad query in one must not blank out the
+        // timings either side of it, which is the whole point of this route.
+        $time = function (string $label, \Closure $work) use (&$timings) {
+            $s = microtime(true);
+
+            try {
+                $work();
+                $timings[$label] = round((microtime(true) - $s) * 1000, 1) . ' ms';
+            } catch (\Throwable $e) {
+                $timings[$label] = 'error: ' . $e->getMessage();
+            }
+        };
+
+        $time('trivial_db_query', fn () => \Illuminate\Support\Facades\DB::table('module')->count());
+        $time('sidebar_menu', fn () => \App\Helpers\Helper::sideMenus());
+        $time('inhouse_checkins_query', fn () => \App\Models\FrontOffice\CheckIn::query()
+            ->where('branch_id', 1)->inHouse()->with('room')->orderBy('folio_no')->get());
+
+        $logPath = storage_path('logs/laravel.log');
+
+        return response()->json([
+            'php' => [
+                'version' => PHP_VERSION,
+                'sapi' => php_sapi_name(),
+                'ini_loaded_file' => php_ini_loaded_file(),
+                'memory_limit' => ini_get('memory_limit'),
+                'max_execution_time' => ini_get('max_execution_time'),
+                'opcache_loaded' => extension_loaded('Zend OPcache'),
+                'opcache_enabled' => $opcache['opcache_enabled'] ?? null,
+                'opcache_hit_rate' => isset($opcache['opcache_statistics']['opcache_hit_rate'])
+                    ? round($opcache['opcache_statistics']['opcache_hit_rate'], 1) : null,
+                'xdebug_loaded' => extension_loaded('xdebug'),
+                'xdebug_mode' => extension_loaded('xdebug') ? (ini_get('xdebug.mode') ?: '(default)') : null,
+            ],
+            'laravel' => [
+                'app_env' => config('app.env'),
+                'app_debug' => config('app.debug'),
+                'session_driver' => config('session.driver'),
+                'queue_connection' => config('queue.default'),
+                'cache_driver' => config('cache.default'),
+            ],
+            'table_row_counts' => $counts,
+            'storage_file_counts' => [
+                'sessions' => $countFiles(storage_path('framework/sessions')),
+                'compiled_views' => $countFiles(storage_path('framework/views')),
+                'file_cache' => $countFiles(storage_path('framework/cache/data')),
+            ],
+            'log_file' => [
+                'exists' => file_exists($logPath),
+                'bytes' => file_exists($logPath) ? filesize($logPath) : 0,
+                'megabytes' => file_exists($logPath) ? round(filesize($logPath) / 1048576, 2) : 0,
+            ],
+            'timings_ms' => $timings,
+            'this_diagnostic_took_ms' => round((microtime(true) - $t0) * 1000, 1),
+        ], 200, [], JSON_PRETTY_PRINT);
+    });
+
+    /*
+     * TEMP DIAGNOSTIC — read-only. Guest WhatsApp text is arriving but the
+     * PDF link is not. Prints the resolved PMS_PUBLIC_URL and the last 10
+     * guest WhatsApp delivery rows so a gateway refusal, if there is one, is
+     * visible without opening the database.
+     *
+     * This route used to also have this server place a live HTTPS call to
+     * its own public tunnel URL. That test was wrong and has been removed:
+     * `php artisan serve` on Windows handles one request at a time (there is
+     * no pcntl fork here), so a call FROM this route TO this same server's
+     * own public address can never come back — the one worker is stuck
+     * waiting on the outbound call, so the inbound leg of that same call has
+     * nothing to answer it. It timed out every time regardless of whether
+     * the tunnel was actually healthy, which is not a real answer. Testing
+     * reachability from outside this process — a browser on another
+     * connection, or the real WhatsApp send — is the only way that is not
+     * self-defeating on this server.
+     */
+    Route::get('diag/pdf-link', function () {
+        $base = \App\Support\GuestDocument::base();
+        $reachableByConfig = \App\Support\GuestDocument::reachable();
+        $why = \App\Support\GuestDocument::unreachableBecause();
+
+        $deliveries = \Illuminate\Support\Facades\DB::table('notification_deliveries')
+            ->where('channel', 'whatsapp')
+            ->where('audience', 'guest')
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get(['id', 'event', 'target', 'status', 'error', 'created_at']);
+
+        return response()->json([
+            'config' => [
+                'PMS_PUBLIC_URL_resolved_to' => $base,
+                'app_thinks_reachable_by_url_shape' => $reachableByConfig,
+                'reason_if_not' => $why,
+            ],
+            'note' => 'Open ' . $base . '/ directly in a browser to test reachability — '
+                . 'this route cannot test itself (see comment above the route in routes/web.php).',
+            'last_10_guest_whatsapp_deliveries' => $deliveries,
+        ], 200, [], JSON_PRETTY_PRINT);
+    });
+
+    /*
+     * TEMP DIAGNOSTIC — has a real side effect: visiting it with ?go=yes
+     * sends one real WhatsApp message. Everything else on this page
+     * (including diag/pdf-link above) only reads.
+     *
+     * The investigation this replaces (two earlier, now-deleted routes) found
+     * that Chatway needs its own send-file endpoint for an attachment, not
+     * send-msg with an extra parameter — see the long comment on
+     * WhatsApp::chatwaySendFile(). This route calls WhatsApp::send() itself,
+     * the exact method every real guest message goes through, so a good
+     * result here means the real thing is fixed, not just a test harness.
+     * Delete this route once that is confirmed.
+     */
+    Route::get('diag/chatway-attach-test', function () {
+        if (request()->query('go') !== 'yes') {
+            return response()->json([
+                'note' => 'Add ?go=yes to actually send. This fires one REAL WhatsApp message, '
+                    . 'through the exact same WhatsApp::send() every real guest message uses, to '
+                    . 'the branch\'s own number, with a PDF attached.',
+                'will_send_to' => '7062313341',
+            ], 200, [], JSON_PRETTY_PRINT);
+        }
+
+        set_time_limit(60);
+
+        $to = '7062313341';
+        $token = 'ej8PngnBhqecrBagV8G4QtB9cbz9LMY0QLVubs27';
+        $pdfUrl = \App\Support\GuestDocument::base() . '/guest-doc/' . $token . '.pdf';
+
+        try {
+            $reply = \App\Support\WhatsApp::send(
+                $to,
+                'TEST — real WhatsApp::send() path — is a PDF attached to THIS message?',
+                $pdfUrl,
+                'Hotel-Bill.pdf'
+            );
+            $result = ['ok' => true, 'reply' => $reply];
+        } catch (\Throwable $e) {
+            $result = ['ok' => false, 'error' => $e->getMessage()];
+        }
+
+        return response()->json([
+            'sent_to' => $to,
+            'pdf_url_used' => $pdfUrl,
+            'result' => $result,
+            'next_step' => 'Open WhatsApp for ' . $to . ' and check the newest message — '
+                . 'does it show a PDF this time?',
+        ], 200, [], JSON_PRETTY_PRINT);
+    });
+
+    /*
+     * TEMP DIAGNOSTIC — has a real side effect: signals the queue worker to
+     * restart once it finishes whatever it is doing right now. This is the
+     * same signal `php artisan queue:restart` sends by hand; queue-worker.bat's
+     * own loop is what actually relaunches it, exactly as it already does
+     * every ~30 minutes on its own (see --max-time in queue-worker.bat).
+     *
+     * Added so a fresh PMS_PUBLIC_URL — written the moment
+     * `php artisan pms:tunnel-watch` sees the Cloudflare tunnel reconnect
+     * with a new address — reaches the running worker immediately, instead
+     * of guest WhatsApp sends silently using a dead link until the worker's
+     * next restart. Delete alongside the other diag/* routes once the
+     * tunnel is confirmed to keep itself healthy without checking on it.
+     */
+    Route::get('diag/queue-restart', function () {
+        \Illuminate\Support\Facades\Artisan::call('queue:restart');
+
+        return response()->json([
+            'note' => 'Restart signal sent. The PMS - Queue Worker window will finish its '
+                . 'current job (if any), print "Queue worker stopped", and relaunch itself '
+                . 'within a few seconds.',
+        ], 200, [], JSON_PRETTY_PRINT);
+    });
 
     /*
      * One family, several rooms, one bill.

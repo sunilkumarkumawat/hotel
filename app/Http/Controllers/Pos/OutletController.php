@@ -12,22 +12,9 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Outlets — the tills a hotel sells through.
- *
- * The form is long because a till is three things at once: a legal entity that
- * prints its GST number on a bill, a set of rules about how it sells, and a
- * printer with a fixed roll width. Splitting those into three screens would
- * only mean opening three screens to add one restaurant, so they sit in three
- * columns of one form instead.
- *
- * Deleting is soft. An outlet with ten thousand bills behind it cannot be
- * erased without orphaning every one of them, so the row is marked deleted,
- * drops out of the POS screens, and can be restored.
- */
+
 class OutletController extends Controller
 {
-    /** Where uploaded logos live on the public disk. */
     private const LOGO_DIR = 'outlets';
 
     public function index(Request $request): View
@@ -59,7 +46,6 @@ class OutletController extends Controller
             ->when($filters['status'] === 'active', fn ($q) => $q->whereNull('deleted_at')->where('status', 1))
             ->when($filters['status'] === 'inactive', fn ($q) => $q->whereNull('deleted_at')->where('status', 0))
             ->when($filters['status'] === 'deleted', fn ($q) => $q->whereNotNull('deleted_at'))
-            // Live outlets first, then the deleted ones, each set by name.
             ->orderByRaw('CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END')
             ->orderBy('name')
             ->paginate(20)
@@ -83,7 +69,7 @@ class OutletController extends Controller
     {
         return view('pos.setup.outlet-form', [
             'outlet' => new Outlet([
-                'kind' => 'restaurant',   // not on the form; the column's default
+                'kind' => 'restaurant',
                 'status' => 1,
                 'page_width' => 80,
                 'print_margin' => 6,
@@ -106,9 +92,6 @@ class OutletController extends Controller
         return view('pos.setup.outlet-form', [
             'outlet' => $outlet,
             'users' => $this->users(),
-            // Fetched as models and plucked in PHP: both `users` and
-            // `outlet_user` carry a `user_id`, so plucking that column straight
-            // out of the join would be ambiguous SQL.
             'picked' => $outlet->users->pluck('user_id')->all(),
         ]);
     }
@@ -146,7 +129,6 @@ class OutletController extends Controller
             ->with('status', "Outlet \"{$outlet->name}\" has been saved.");
     }
 
-    /** Hide it, keep it. Every bill it rang up still names it. */
     public function destroy(int $id): RedirectResponse
     {
         $outlet = Outlet::query()->forBranch()->findOrFail($id);
@@ -166,12 +148,6 @@ class OutletController extends Controller
         return back()->with('status', "Outlet \"{$outlet->name}\" is back.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /** @return array<string, mixed> */
     private function validated(Request $request, ?int $id = null): array
     {
@@ -180,25 +156,12 @@ class OutletController extends Controller
         $rules = [
             'name' => [
                 'required', 'string', 'max:255',
-                // Two live outlets in one branch cannot share a name — a
-                // cashier picking a till from a dropdown has nothing else to go
-                // on. A deleted one may, so restoring is never blocked by a
-                // name somebody reused.
-                // A NULL branch is its own value — `branch_id = NULL` matches
-                // nothing, which would quietly switch the check off.
                 Rule::unique('outlets', 'name')
                     ->where(fn ($query) => $branch === null
                         ? $query->whereNull('branch_id')->whereNull('deleted_at')
                         : $query->where('branch_id', $branch)->whereNull('deleted_at'))
                     ->ignore($id),
             ],
-            /*
-             * `code` and `kind` are columns, not fields. The old screen has
-             * neither, so neither is asked for here — a new outlet takes the
-             * database's own default for `kind` (restaurant) and an existing one
-             * keeps whatever it already had. Put them back on the form and this
-             * is where their rules go.
-             */
             'status' => 'required|boolean',
 
             'address1' => 'nullable|string|max:255',
@@ -213,7 +176,6 @@ class OutletController extends Controller
             'pan_no' => 'nullable|string|max:20',
             'sac_code' => 'nullable|string|max:20',
 
-            // Some browsers post HH:MM, others HH:MM:SS. Both are the same time.
             'start_time' => 'nullable|date_format:H:i,H:i:s',
             'end_time' => 'nullable|date_format:H:i,H:i:s',
 
@@ -247,8 +209,6 @@ class OutletController extends Controller
             'logo.max' => 'The logo must be 1 MB or smaller.',
         ]);
 
-        // An unticked checkbox posts nothing at all, so every flag is read from
-        // the request rather than from what happened to arrive.
         foreach (array_keys(Outlet::FLAGS) as $flag) {
             $data[$flag] = $request->boolean($flag);
         }
@@ -258,8 +218,6 @@ class OutletController extends Controller
         $data['bill_start_no'] = (int) ($data['bill_start_no'] ?? 1) ?: 1;
         $data['header_font_size'] = (int) ($data['header_font_size'] ?? 0);
 
-        // A liquor series that is not being used is not worth keeping around to
-        // confuse the next person who opens this form.
         if (! $data['diff_liquor_series']) {
             $data['liquor_bill_series'] = null;
         }
@@ -269,13 +227,6 @@ class OutletController extends Controller
         return $data;
     }
 
-    /**
-     * Save an uploaded logo and return the path to record.
-     *
-     * Returns the existing path untouched when nothing was uploaded, so a
-     * cashier editing the phone number does not silently lose the logo. The old
-     * file is deleted once the new one is safely written — never before.
-     */
     private function storeLogo(Request $request, ?Outlet $outlet): ?string
     {
         $current = $outlet?->logo_path;
@@ -299,7 +250,6 @@ class OutletController extends Controller
         return $current;
     }
 
-    /** Everyone who could be put on a till. */
     private function users()
     {
         return User::query()

@@ -212,6 +212,74 @@
         }
     });
 
+    /*
+     * A scan (or a typed code + Enter) drops the item into an empty line
+     * rather than filtering anything, because the point of a scanner is not
+     * stopping to look at a list. Enter is caught here so it never falls
+     * through to submitting the whole document — the form has no other
+     * listener for this box. Picking the item by its id and dispatching the
+     * same change event the dropdown fires fills the rate, tax and stock
+     * note exactly as choosing it by hand would.
+     */
+    const scanInput = form.querySelector('[data-barcode-scan]');
+    const scanMsg = form.querySelector('[data-barcode-msg]');
+    const byCode = new Map(
+        boot.items.filter((i) => i.code).map((i) => [String(i.code).toLowerCase(), i])
+    );
+
+    if (scanInput) {
+        scanInput.addEventListener('keydown', function (event) {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+
+            const code = scanInput.value.trim();
+            scanInput.value = '';
+
+            if (!code) return;
+
+            const item = byCode.get(code.toLowerCase());
+
+            if (!item) {
+                if (scanMsg) scanMsg.textContent = 'No item is set up with the code "' + code + '".';
+
+                return;
+            }
+
+            if (scanMsg) scanMsg.textContent = '';
+
+            // The first line with nothing chosen yet — same as a blank
+            // document opens with — or a fresh one when every line is full.
+            let row = $$('[data-line]').find(function (candidate) {
+                const picker = $('[data-item]', candidate);
+
+                return picker && !picker.value;
+            });
+
+            if (!row) {
+                const clone = template.content.firstElementChild.cloneNode(true);
+                const index = nextIndex();
+
+                clone.querySelectorAll('[name]').forEach(function (el) {
+                    el.name = el.name.replace('__i__', index);
+                });
+
+                body.appendChild(clone);
+                row = clone;
+            }
+
+            const picker = $('[data-item]', row);
+            picker.value = String(item.id);
+            picker.dispatchEvent(new Event('change', { bubbles: true }));
+
+            const qtyBox = $('[data-qty]', row);
+
+            if (qtyBox) {
+                qtyBox.focus();
+                qtyBox.select();
+            }
+        });
+    }
+
     // The Remove buttons are revealed by script, so a page without JavaScript
     // never shows a button that would do nothing.
     $$('[data-line-remove]').forEach((btn) => btn.classList.remove('nv-hidden'));

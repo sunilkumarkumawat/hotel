@@ -14,30 +14,10 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * Every screen that writes a voucher.
- *
- * Six screens, one controller, because they differ in exactly three ways —
- * which kind of voucher they write, which side the cash sits on, and which
- * ledgers the party dropdown offers — and everything else about them is
- * identical. Copying this six times is how five of them end up with the balance
- * check and the sixth does not.
- *
- * None of them writes to the database directly: they shape lines and hand them
- * to {@see \App\Support\Vouchers::post()}, which is the only place a voucher is
- * checked, numbered and stored. A screen cannot post an unbalanced voucher
- * because a screen cannot post at all.
- */
+
 class VoucherController extends Controller
 {
-    /**
-     * slug => what that screen is.
-     *
-     * `party` narrows the ledger dropdown to a group's subtree by name, which
-     * is what makes Vendor Payment a vendor screen rather than a second
-     * Payment Voucher. A hotel that renames "Sundry Creditors" gets an empty
-     * list and a message saying so, rather than a silently wrong one.
-     */
+
     public static function kinds(): array
     {
         return [
@@ -104,7 +84,6 @@ class VoucherController extends Controller
         ];
     }
 
-    /** GET accounting/<slug> */
     public function index(Request $request): View
     {
         $slug = $this->slug($request);
@@ -144,31 +123,16 @@ class VoucherController extends Controller
             'partyLedgers' => $this->partyOptions($branchId, $kind),
             'partyBalances' => $this->partyBalances($branchId, $kind),
             'allLedgers' => Ledgers::options($branchId),
-            // Same builder the rows above came from — a search box narrows
-            // the rows but not this, so the total still reads "everything
-            // in range", but it can no longer disagree with the list on
-            // *which screen's* vouchers that range means.
             'total' => round((float) (clone $base)->sum('amount'), 2),
         ]);
     }
 
-    /**
-     * Every voucher that belongs on one of the six screens, before search or
-     * paging — the row list and the total below it are both built from a
-     * clone of this, so they cannot drift the way they used to: the total
-     * on Payment Voucher used to count Vendor Payment's amounts too, even
-     * though not one of those vouchers appeared in the list above it,
-     * because only the row query excluded `source_type`. One query, cloned
-     * for each of the two different endings, closes that gap.
-     */
     private function scopedVouchers(int $branchId, array $kind, string $from, string $to): Builder
     {
         return Voucher::query()
             ->forBranch($branchId)
             ->posted()
             ->ofType($kind['type'])
-            // Vendor Payment and Payment Voucher write the same kind of
-            // voucher, so the list is narrowed by what wrote it too.
             ->when($kind['source'], fn ($q, $source) => $q->where('source_type', $source))
             ->when(
                 ! $kind['source'] && $kind['type'] !== 'journal' && $kind['type'] !== 'contra',
@@ -178,7 +142,6 @@ class VoucherController extends Controller
             ->where('voucher_date', '<', Ledgers::dayAfter($to));
     }
 
-    /** POST accounting/<slug> */
     public function store(Request $request): RedirectResponse
     {
         $slug = $this->slug($request);
@@ -213,8 +176,6 @@ class VoucherController extends Controller
                 'created_by' => $request->user()->user_id,
             ], $this->lines($kind, $data));
         } catch (PostingRefused $e) {
-            // The message is written for the clerk at the screen, so it goes
-            // straight back to them rather than into a log.
             return back()->with('error', $e->getMessage())->withInput();
         }
 
@@ -228,7 +189,6 @@ class VoucherController extends Controller
         ));
     }
 
-    /** POST accounting/<slug>/{voucher}/cancel */
     public function cancel(Request $request, int $voucher): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -247,20 +207,7 @@ class VoucherController extends Controller
         ));
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * The voucher's lines, built from whichever shape of form was posted.
-     *
-     * This is the only part of the six screens that genuinely differs. Note
-     * what it does *not* do: it never decides whether the voucher balances, and
-     * it never picks a number. Both of those belong to Vouchers::post(), which
-     * is the single door into the books.
-     *
      * @return array<int, array<string, mixed>>
      */
     private function lines(array $kind, array $data): array
@@ -278,19 +225,11 @@ class VoucherController extends Controller
             $amount = round((float) ($data['amount'] ?? 0), 2);
 
             return [
-                // Out of one, into the other. Both sides are checked for being
-                // cash or bank inside Vouchers::post().
                 ['ledger_id' => (int) ($data['cash_ledger_id'] ?? 0), 'debit' => 0, 'credit' => $amount, 'narration' => null],
                 ['ledger_id' => (int) ($data['to_ledger_id'] ?? 0), 'debit' => $amount, 'credit' => 0, 'narration' => null],
             ];
         }
 
-        /*
-         * Payment and Receipt are mirror images: the cash side takes the total
-         * of the party lines, on the opposite side to them. Working the total
-         * out here rather than trusting a posted figure is what stops a form
-         * that says "₹5,000 out" while its lines add to ₹4,000.
-         */
         $isPayment = $kind['type'] === 'payment';
         $lines = [];
         $total = 0.0;
@@ -324,12 +263,6 @@ class VoucherController extends Controller
     }
 
     /**
-     * The party dropdown.
-     *
-     * Narrowed to a group's subtree for the two party screens and left wide
-     * open for the others, so a Payment Voucher can pay an expense head
-     * directly while Vendor Payment cannot.
-     *
      * @return array<int, string>
      */
     private function partyOptions(int $branchId, array $kind): array
@@ -344,13 +277,6 @@ class VoucherController extends Controller
     }
 
     /**
-     * What each party stands at — shown beside the dropdown.
-     *
-     * The whole reason Vendor Payment exists as its own screen: paying a
-     * supplier without seeing what they are owed is data entry, not accounting.
-     * Signs are flipped so a creditor the hotel owes ₹5,000 reads as 5,000
-     * rather than as −5,000.
-     *
      * @return array<int, float>
      */
     private function partyBalances(int $branchId, array $kind): array
@@ -366,8 +292,6 @@ class VoucherController extends Controller
             return [];
         }
 
-        // A creditor is Cr-positive and a debtor Dr-positive, so one is flipped
-        // and the other is not — both then read as "owes / is owed this much".
         $flip = $kind['party'] === AccountGroup::CREDITORS ? -1 : 1;
 
         return Ledgers::balancesFor($branchId, $ledgerIds, today()->toDateString())
@@ -375,14 +299,6 @@ class VoucherController extends Controller
             ->all();
     }
 
-    /**
-     * Which of the six screens this is.
-     *
-     * Read off the route's defaults for the same reason the facility setup
-     * screens do it: Laravel appends route defaults after URI parameters, so a
-     * method signature that took it as an argument would get them in the wrong
-     * order the moment a route grew an id.
-     */
     private function slug(Request $request): string
     {
         return (string) ($request->route()?->defaults['kind'] ?? '');

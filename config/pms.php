@@ -45,6 +45,16 @@ return [
     'public_url' => env('PMS_PUBLIC_URL'),
     'guest_doc_days' => (int) env('PMS_GUEST_DOC_DAYS', 30),
 
+    /*
+     * Where `php artisan pms:tunnel-watch` (routes/console.php) finds the
+     * cloudflared program, only if it is not where the official Windows
+     * installer always puts it. Leave this empty unless a portable copy of
+     * cloudflared.exe lives somewhere unusual on this machine — the command
+     * already checks the normal install path (and, failing that, PATH) on
+     * its own.
+     */
+    'cloudflared_path' => env('CLOUDFLARED_PATH'),
+
     'tax_default' => env('PMS_TAX_DEFAULT', 'none'),
 
     /*
@@ -76,6 +86,20 @@ return [
 
     'default_arrival_time' => '12:00',
     'default_checkout_time' => '11:00',
+
+    /*
+     * The longest stay the folio will post room charges for in one go.
+     *
+     * A booking's expected checkout date is typed by hand, and a slipped
+     * year (2126 instead of 2026) turns "one night" into tens of thousands —
+     * Folio::postRoomCharges() would insert one row per night and the
+     * checkout screen would then try to render all of them, which is heavy
+     * enough to crash the browser tab rather than show a bill. This is a
+     * sanity limit, not a business rule: a real stay this long has never
+     * happened at a hotel, so past it the folio refuses to post and says so,
+     * instead of quietly building a folio nobody could open.
+     */
+    'max_stay_nights' => (int) env('PMS_MAX_STAY_NIGHTS', 366),
 
     /*
     |--------------------------------------------------------------------------
@@ -172,5 +196,24 @@ return [
     'notify_poll_seconds' => env('PMS_NOTIFY_POLL', 25),
     'notify_keep_days' => env('PMS_NOTIFY_KEEP_DAYS', 30),
     'notify_feed_limit' => 30,
+
+    /*
+     * Kill switches for outbound WhatsApp and mail — staff and guest — and
+     * the guest PDF that rides with them, so each can be taken out of the
+     * picture on its own while these are being tested a piece at a time,
+     * without unticking Notification Settings event by event. The in-app
+     * bell is never affected by any of these — it is always written.
+     *
+     * Guest WhatsApp, the guest PDF link that rides with it, and now guest
+     * and staff mail too are all on at the desk's own request. Only staff
+     * WhatsApp still stays paused until asked for. Flip one back to true —
+     * or set the matching PMS_..._PAUSED=true in .env — to pause just that
+     * piece again.
+     */
+    'guest_whatsapp_paused' => (bool) env('PMS_GUEST_WHATSAPP_PAUSED', false),
+    'guest_mail_paused' => (bool) env('PMS_GUEST_MAIL_PAUSED', false),
+    'guest_pdf_paused' => (bool) env('PMS_GUEST_PDF_PAUSED', false),
+    'staff_mail_paused' => (bool) env('PMS_STAFF_MAIL_PAUSED', false),
+    'staff_whatsapp_paused' => (bool) env('PMS_STAFF_WHATSAPP_PAUSED', true),
 
 ];

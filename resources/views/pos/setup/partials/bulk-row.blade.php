@@ -18,10 +18,23 @@
 
 <tr @class(['is-new', 'is-invalid' => $rowHasError]) data-bulk-row>
     @if ($photos ?? false)
-        {{-- A photo is added after the row exists and has an id — see the
-             "what is already there" loop in list.blade.php — so a row still
-             being typed just holds the column's place. --}}
-        <td class="nv-muted nv-item-photo-pending" title="Save this row first, then add a photo">—</td>
+        {{-- Chosen while the row is still being typed — it uploads together
+             with everything else when the row saves. The span only stands in
+             for the <form> the "what is already there" version below wraps
+             its own input in — this cell posts through the big rows-new form
+             instead — so it reuses that same hide-the-raw-input styling. --}}
+        <td>
+            <span class="nv-item-photo-form">
+                <label for="rows-new_{{ $i }}_photo" class="nv-item-photo" title="Add a photo" data-item-photo-label>
+                    <x-icon name="upload" />
+                </label>
+                <input type="file" name="{{ $prefix }}[photo]" id="rows-new_{{ $i }}_photo"
+                       accept="image/png,image/jpeg,image/webp" form="rows-new" data-item-photo-input />
+            </span>
+            @error('rows.' . $i . '.photo')
+                <span class="nv-error">{{ $message }}</span>
+            @enderror
+        </td>
     @endif
     @foreach ($fields as $name => $field)
         <td>

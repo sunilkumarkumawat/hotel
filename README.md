@@ -87,14 +87,28 @@ apply without wiping what you have.
 > appended, so nothing you already have moves or loses its permissions. Then
 > tick the new rows for your user under **Administration → Users**.
 >
-> Outlet logos are stored on the public disk, so run `php artisan storage:link`
-> once as well if you want to upload one. Everything else works without it.
+> Outlet logos, item photos and guest ID proof photos are all stored on the
+> public disk, so they need `php artisan storage:link` run once — without it
+> the files still save, they just show as a broken image. `start-pms.bat`
+> now runs this on every start, so it is normally nothing you need to think
+> about; if you are running the server another way, run it yourself once.
+>
+> That link alone is not quite enough, though: PHP's own built-in server (the
+> thing `php artisan serve` starts) refuses to serve a file reached through a
+> symlink that points outside the folder it was started in, and `public/storage`
+> is exactly that kind of symlink — so photos would 403 even with the link in
+> place. `server.php` (run via `serve.bat`, which `start-pms.bat` starts
+> automatically) is a copy of Laravel's own dev-server router with one small
+> addition that serves `/storage/...` itself instead of letting that
+> restriction apply. This is a `php artisan serve` quirk, not a project bug —
+> a real web server (Apache, Nginx) was never affected by it in the first
+> place.
 
 ## 3. Run
 
-```
-php artisan serve
-```
+Double-click `start-pms.bat`. If you need to start just the web server by
+hand for some reason, use `serve.bat`, not `php artisan serve` directly —
+see the note above on why.
 
 Open <http://127.0.0.1:8000> and sign in:
 

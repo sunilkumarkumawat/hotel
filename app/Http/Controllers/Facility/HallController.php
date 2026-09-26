@@ -19,23 +19,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The banquet diary.
- *
- * A hall is held from one moment to another, and the one thing this screen must
- * never allow is two weddings in the same room. The clash test is the same
- * half-open rule the room calendar uses, applied to date-and-time together: a
- * conference that ends at 18:00 does not block a reception that starts at
- * 18:00, and a booking being edited never finds itself busy.
- *
- * A tentative booking holds the hall exactly as a confirmed one does. That is
- * the entire point of writing a hold down — a banquet manager who is told a
- * Saturday is free because the hold was "only tentative" has been told
- * something useless.
- */
 class HallController extends Controller
 {
-    /** GET hall/bookings */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -55,8 +40,6 @@ class HallController extends Controller
         $rows = HallBooking::query()
             ->forBranch($branchId)
             ->with(['hall', 'company', 'items'])
-            // An event that starts before the window but runs into it still
-            // belongs on the list — the test is overlap, not containment.
             ->where('to_date', '>=', $filters['from'])
             ->where('from_date', '<', CarbonImmutable::parse($filters['to'])->addDay()->toDateString())
             ->when($filters['hall'], fn ($q, $id) => $q->where('hall_id', $id))
@@ -90,8 +73,6 @@ class HallController extends Controller
             ],
         ]);
     }
-
-    /** GET hall/bookings/new  ·  GET hall/bookings/{booking}/edit */
     public function form(Request $request, ?int $booking = null): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -99,6 +80,8 @@ class HallController extends Controller
         $row = $booking
             ? HallBooking::query()->forBranch($branchId)->with('items')->findOrFail($booking)
             : new HallBooking([
+                'guest_name' => $request->string('guest_name')->toString() ?: null,
+                'mobile' => $request->string('mobile')->toString() ?: null,
                 'from_date' => Facility::date($request->string('date')->toString()),
                 'to_date' => Facility::date($request->string('date')->toString()),
                 'from_time' => '10:00',
@@ -120,8 +103,6 @@ class HallController extends Controller
             'itemTaxChoices' => Tax::options($branchId),
         ]);
     }
-
-    /** POST hall/bookings  ·  PUT hall/bookings/{booking} */
     public function save(Request $request, ?int $booking = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -188,13 +169,6 @@ class HallController extends Controller
             ))->withInput();
         }
 
-        /*
-         * The quantity is worked out from the dates and only then overridden by
-         * what the form sent. The form is where somebody types 1 by mistake and
-         * bills a three-day wedding as one hour; the screen shows this figure
-         * and lets it be changed, which is a different thing from believing
-         * whatever arrives.
-         */
         $rateType = $data['rate_type'];
         $suggested = Facility::hallQty($rateType, $start, $end);
         $qty = round((float) ($data['qty'] ?? 0) ?: $suggested, 2);
@@ -214,22 +188,9 @@ class HallController extends Controller
 
         $items = $this->shapeItems($data['items'] ?? [], $branchId);
 
-        /*
-         * The extras are kept as two figures, not one.
-         *
-         * `amount` on this booking is its TAXABLE VALUE and `total_amount` is
-         * what the guest pays, and the two have to stay `amount + tax = total`
-         * — a folio line is posted straight from them, and a bill whose value
-         * and tax do not add up to its total is a bill somebody has to explain.
-         * Adding the extras' tax-inclusive total into `amount` would have
-         * counted their tax twice.
-         */
         $extrasNet = round(array_sum(array_column($items, 'amount')), 2);
         $extrasTax = round(array_sum(array_column($items, 'tax_amount')), 2);
 
-        // Facility::guest prefers the typed name over the stay's, which is what
-        // a banquet needs: the wife booking the hall on her husband's room is
-        // still the person the manager rings.
         $guest = Facility::guest($data, $branchId);
 
         $warning = null;
@@ -256,9 +217,6 @@ class HallController extends Controller
                 'amount' => round($figures['amount'] + $extrasNet, 2),
                 'tax_choice' => $choice,
                 'tax_percent' => $figures['tax_percent'],
-                // Hall hire and its extras are taxed separately — an extra can
-                // carry GST where the hire does not — so the two taxes are
-                // added rather than one rate being worked out over the lot.
                 'tax_amount' => round($figures['tax_amount'] + $extrasTax, 2),
                 'total_amount' => round($figures['total_amount'] + $extrasNet + $extrasTax, 2),
                 'advance' => round((float) ($data['advance'] ?? 0), 2),
@@ -275,10 +233,6 @@ class HallController extends Controller
             }
 
             $row->save();
-
-            // Replaced wholesale rather than merged: the grid on the form is
-            // the complete list of extras, and a line the clerk deleted has to
-            // actually go.
             $row->items()->delete();
 
             foreach ($items as $item) {
@@ -324,7 +278,6 @@ class HallController extends Controller
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
 
-    /** POST hall/bookings/{booking}/status */
     public function status(Request $request, int $booking): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -343,7 +296,6 @@ class HallController extends Controller
         return back()->with('status', $row->booking_no . ' is now ' . strtolower($row->status_label) . '.');
     }
 
-    /** POST hall/bookings/{booking}/cancel */
     public function cancel(int $booking): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -372,7 +324,6 @@ class HallController extends Controller
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
 
-    /** GET hall/calendar — a week of the diary, hall by hall. */
     public function calendar(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -392,12 +343,6 @@ class HallController extends Controller
             ->orderBy('from_time')
             ->get();
 
-        /*
-         * A booking is laid out per day rather than as one bar across the week:
-         * a wedding that runs Friday to Sunday shows in all three columns, and
-         * the desk can see at a glance that Saturday is gone. A single spanning
-         * bar reads better and answers the question worse.
-         */
         $grid = [];
 
         foreach ($bookings as $booking) {
@@ -425,29 +370,12 @@ class HallController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * The booking already holding this hall over this window, if any.
-     *
-     * Date and time are compared as one string — '2026-09-18 18:00:00' — which
-     * works because both halves are zero-padded and stored that way. Comparing
-     * the date and the time as two columns would have to special-case a booking
-     * that starts one evening and ends the next morning, and that special case
-     * is exactly where double-bookings get in.
-     */
     private function clash(Hall $hall, int $branchId, string $start, string $end, ?int $exceptId): ?HallBooking
     {
         return HallBooking::query()
             ->forBranch($branchId)
             ->holding()
             ->where('hall_id', $hall->id)
-            // Cheap date window first so the raw comparison below runs on a few
-            // rows rather than on the whole diary.
             ->where('to_date', '>=', substr($start, 0, 10))
             ->where('from_date', '<=', substr($end, 0, 10))
             ->when($exceptId, fn ($q, $id) => $q->where('id', '!=', $id))
@@ -456,12 +384,6 @@ class HallController extends Controller
     }
 
     /**
-     * The extras grid, cleaned and priced.
-     *
-     * Each line is taxed on its own choice — a buffet can carry GST where the
-     * hall hire does not — and a line with no name or no money on it is a blank
-     * row on a grid of blank rows, not an error.
-     *
      * @return array<int, array<string, mixed>>
      */
     private function shapeItems(array $rows, int $branchId): array

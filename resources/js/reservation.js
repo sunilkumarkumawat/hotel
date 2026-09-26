@@ -835,6 +835,118 @@
         }
     }
 
+    /* ── Returning-guest suggestions while typing ─────────────────────────
+     *
+     * Customer Search above is a lookup somebody has to open; this is the
+     * same lookup offered without being asked for it — type into First Name
+     * or Mobile No and, if it matches somebody already in the guest book, a
+     * short list drops below that field. Picking one runs through the same
+     * applyGuest() as Customer Search, so a returning guest is filled in and
+     * booked exactly the same way whichever route found them.
+     */
+
+    $$('[data-typeahead]').forEach(function (wrap) {
+        const input = wrap.querySelector('input');
+        const box = wrap.querySelector('[data-typeahead-results]');
+
+        if (!input || !box) return;
+
+        let matches = [];
+        let active = -1;
+        let timer = null;
+
+        function hide() {
+            box.hidden = true;
+            box.innerHTML = '';
+            matches = [];
+            active = -1;
+        }
+
+        function highlight() {
+            $$('.nv-guest-result', box).forEach((el, i) => el.classList.toggle('is-active', i === active));
+        }
+
+        function choose(guest) {
+            applyGuest(guest);
+            hide();
+        }
+
+        function render(guests) {
+            matches = Array.isArray(guests) ? guests : [];
+            active = -1;
+
+            if (!matches.length) {
+                hide();
+                return;
+            }
+
+            box.innerHTML = '';
+
+            matches.forEach(function (guest) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'nv-guest-result';
+                item.innerHTML =
+                    '<span class="nv-guest-name">' + guest.name + '</span>' +
+                    '<span class="nv-guest-meta">Returning guest · ' + (guest.mobile || '—') +
+                    (guest.email ? ' · ' + guest.email : '') + '</span>';
+
+                // mousedown with preventDefault, not click — a click would
+                // lose the race to the field's own blur, which closes this
+                // list (and erases it) before the click ever lands.
+                item.addEventListener('mousedown', function (event) {
+                    event.preventDefault();
+                    choose(guest);
+                });
+
+                box.appendChild(item);
+            });
+
+            box.hidden = false;
+        }
+
+        input.addEventListener('input', function () {
+            clearTimeout(timer);
+
+            const term = input.value.trim();
+
+            if (term.length < 2) {
+                hide();
+                return;
+            }
+
+            timer = setTimeout(function () {
+                fetch(boot.urls.guests + '?q=' + encodeURIComponent(term), {
+                    headers: { Accept: 'application/json' },
+                })
+                    .then((r) => r.json())
+                    .then(render)
+                    .catch(hide);
+            }, 250);
+        });
+
+        input.addEventListener('keydown', function (event) {
+            if (box.hidden || !matches.length) return;
+
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                active = (active + 1) % matches.length;
+                highlight();
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                active = (active - 1 + matches.length) % matches.length;
+                highlight();
+            } else if (event.key === 'Enter' && active > -1) {
+                event.preventDefault();
+                choose(matches[active]);
+            } else if (event.key === 'Escape') {
+                hide();
+            }
+        });
+
+        input.addEventListener('blur', hide);
+    });
+
     /* ── Small helpers ──────────────────────────────────────────────────── */
 
     function alertInline(message) {

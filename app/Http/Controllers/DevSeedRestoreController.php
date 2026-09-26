@@ -50,100 +50,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
-/**
- * RUN ONCE, ON PURPOSE — safe to delete once it has been triggered.
- *
- * The demo data DevSeedController and DevSeedPosController wrote earlier
- * today (see their docblocks — both classes are still here, but emptied,
- * left only as a record of what ran) has since been deleted from the
- * database. Not hidden by a branch filter, not soft-deleted — genuinely
- * gone: `SELECT COUNT(*) FROM reservations WHERE remark = '[DEMO SEED]'`
- * returns 0, and the same is true of guests and check_ins. The real data —
- * 16 physical Rooms and the property's master lookup lists, all under Head
- * Office — is untouched and is not this class's business.
- *
- * This writes an equivalent batch again: 130 guests, 215 reservations, 116
- * check-ins, 100 bills, 146 advance deposits, 110 accounting vouchers and
- * 130 POS orders, plus the child rows each of those needs to look like a
- * real folio rather than a bare header row (reservation_rooms, folio
- * charges, settlements, voucher entries, POS order items, invoices and
- * payments). It is tagged exactly the way the first run was tagged, because
- * that tagging is the only thing standing between this data and a human who
- * needs to find and bulk-manage it later:
- *
- *   - `created_by` is left NULL on every row that has the column. A real
- *     screen always stamps the signed-in user; nothing else in this app
- *     leaves it empty, so NULL is unambiguous.
- *   - Every *document-level* remark/narration column reads exactly
- *     "[DEMO SEED]" — guests, reservations, check_ins, bills,
- *     advance_deposits, vouchers (narration) and pos_orders. Child rows
- *     (reservation_rooms, reservation_services, folio_charges, settlements,
- *     voucher_entries, pos_order_items, pos_invoices, pos_payments) are not
- *     tagged themselves, the same way the original POS run left its
- *     invoices and payments untagged — find them by joining back to the
- *     tagged parent.
- *   - Every seeded guest's email ends "@example-demo.test".
- *
- * ── The bug this is written to avoid ──────────────────────────────────────
- *
- * The property has a fixed number of physical rooms (read live below, not
- * hardcoded — see $roomCount). Only that many reservations can genuinely be
- * "in house" on any one day, because only that many rooms exist to put a
- * guest in. The first run asked for more simultaneous in-house arrivals than
- * that, and for every attempt beyond capacity it left behind a
- * `reservation_rooms` row — a real room_type_id, a real date range, no
- * room_id — with the parent reservation's status still 'confirmed', and
- * never created a matching check-in. App\Support\MonthlyPosition, correctly,
- * counts every confirmed/tentative reservation_rooms row as demand whether
- * or not a room was ever assigned — that is exactly right for an ordinary
- * advance booking — so those leftover rows stacked as phantom demand on top
- * of the rooms that were genuinely occupied, and the Reservation Calendar
- * Monthly report started showing a negative Position and an Occupancy % over
- * 100. DevSeedCleanupController (still live) was written afterwards to
- * cancel exactly those rows.
- *
- * This run does not reproduce that: the number of reservations whose stay
- * spans *today*, and that this class actually checks in, is capped at
- * $roomCount, and nothing beyond that cap gets a `reservation_rooms` row for
- * today at all — a booking that cannot be "in house" today is instead placed
- * safely in the past (checked out, no-show, cancelled) or the near future
- * (confirmed/tentative), which is also, separately, a more realistic spread
- * for demo data than piling every booking onto one date.
- *
- * ── How it decides what to reuse versus what to add ───────────────────────
- *
- * Guests, reservations, check-ins, bills, deposits, vouchers and POS orders
- * are the demo data and are written new every time this runs. Everything
- * they point at — rooms, room types, plan types, pay modes, ledgers, the POS
- * outlet and its tables/categories/items — is read from what the property
- * already has configured. Only where one of those lists is empty does this
- * class add a minimal fallback row so the batch has something to point at,
- * exactly the way the original POS run added 4 tables and 17 menu items
- * because the outlet it found had none — and exactly like that run, a
- * fallback master is real, ongoing structure, not demo data: it is not
- * tagged and would not be touched by a bulk-delete of "[DEMO SEED]" rows.
- * The JSON this returns lists anything it had to add this way under
- * `fallback_masters_created`, empty when nothing was needed.
- *
- * ── Money ──────────────────────────────────────────────────────────────────
- *
- * Room and folio figures are worked out with App\Support\Money — the same
- * class the booking and check-in screens use — rather than hand-rolled
- * arithmetic, so a seeded row's amount/tax/net agree with each other the
- * same way a real one's do. Tax is posted as `tax_choice = 'fixed'` with a
- * chosen percent (12% up to ₹7,500 a night, 18% above — the ordinary Indian
- * hotel GST slabs) rather than `'slab'`, deliberately: `'fixed'` reads back
- * exactly the percent it was given, so this does not depend on guessing how
- * the property's own Tax master happens to be set up. POS items are posted
- * at a flat 5% (the standard rate for a standalone Indian restaurant outside
- * the input-tax-credit scheme) with `tax_choice = 'item'`, matching what the
- * tax-is-a-choice migration backfills onto an order whose lines already
- * carry their own tax.
- *
- * Self-guarded exactly like DevSeedCleanupController: a secret key, refused
- * outside local development, refused off localhost. Delete this file and its
- * route once it has been run.
- */
+
 class DevSeedRestoreController extends Controller
 {
     private const SECRET_KEY = 'pms-restore-seed-6d4b28fa';
@@ -152,7 +59,6 @@ class DevSeedRestoreController extends Controller
 
     private const EMAIL_SUFFIX = '@example-demo.test';
 
-    /** Targets from the original run's own docblock — see DevSeedController. */
     private const TARGET_GUESTS = 130;
 
     private const TARGET_RESERVATIONS = 215;
@@ -240,15 +146,8 @@ class DevSeedRestoreController extends Controller
             abort(404);
         }
 
-        // Left generous on purpose: this writes several thousand rows in one
-        // request, each one running normal model events (RecordsActivity's
-        // audit log among them), and a shared-hosting-style 30 second default
-        // would cut it off mid-batch on a slower disk.
         set_time_limit(300);
 
-        // The branch is read from where the real rooms actually live rather
-        // than assumed to be id 1 — see the class docblock on why that
-        // matters here specifically.
         $branchId = (int) (Room::query()->whereNotNull('branch_id')->value('branch_id') ?: 0);
 
         if (! $branchId) {
@@ -293,14 +192,7 @@ class DevSeedRestoreController extends Controller
         $summary = DB::transaction(function () use (
             $branchId, $rooms, $roomTypes, $masters, &$errors, &$counts, &$fallbackMasters
         ) {
-            // Each phase is independent demo data (guests, then bookings,
-            // then deposits and bills against those bookings, then vouchers
-            // and POS orders, which touch nothing above) and is guarded here
-            // on top of its own internal per-row try/catch. A phase whose
-            // one-time setup fails outright — no branch-appropriate ledger
-            // found and even the fallback create() fails, say — logs that
-            // and is skipped, rather than taking every phase before it down
-            // with it inside this one shared transaction.
+
             $guests = [];
             $plan = ['rows' => [], 'breakdown' => []];
             $meta = [];
@@ -378,12 +270,7 @@ class DevSeedRestoreController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Masters — read, never written to (beyond the documented fallbacks)
-    |--------------------------------------------------------------------------
-    */
-
+    
     /** @return array<string, mixed> */
     private function loadMasters(int $branchId): array
     {
@@ -405,12 +292,6 @@ class DevSeedRestoreController extends Controller
             'branch' => Branch::find($branchId),
         ];
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Guests
-    |--------------------------------------------------------------------------
-    */
 
     /** @return array<int, Guest> */
     private function seedGuests(int $branchId, array $masters, int $count, array &$errors): array
@@ -463,22 +344,10 @@ class DevSeedRestoreController extends Controller
         return $created;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Reservation plan — pure PHP, no writes. Decides how the 215 reservations
-    | split across the six scenarios before a single row is created, so the
-    | in-house cap is enforced by construction rather than checked after the
-    | fact.
-    |--------------------------------------------------------------------------
-    */
-
     /** @return array{rows: list<array<string, mixed>>, breakdown: array<string, int>} */
     private function buildReservationPlan(int $roomCount): array
     {
-        // Comfortably under capacity — "a small slice", never "sold out
-        // today". Still scales down if this property somehow had very few
-        // rooms, and never exceeds $roomCount, which is the one rule that
-        // actually matters here.
+
         $inHouse = max(1, min(10, $roomCount > 2 ? $roomCount - 2 : $roomCount));
         $checkedOut = self::TARGET_CHECK_INS - $inHouse;
         $noShow = 20;
@@ -488,8 +357,6 @@ class DevSeedRestoreController extends Controller
         $rows = [];
 
         for ($i = 0; $i < $checkedOut; $i++) {
-            // Arrival at least 6 days ago so a stay of up to 5 nights always
-            // checks out before today — never brushes the in-house window.
             $arrivalOffset = -random_int(6, 90);
             $nights = random_int(1, 5);
             $lead = random_int(0, 25);
@@ -498,8 +365,6 @@ class DevSeedRestoreController extends Controller
         }
 
         for ($i = 0; $i < $inHouse; $i++) {
-            // By construction this always covers today: arrival on or before
-            // today, checkout strictly after it.
             $arrivalOffset = -random_int(0, 3);
             $checkoutOffset = random_int(1, 4);
             $lead = random_int(0, 20);
@@ -571,11 +436,6 @@ class DevSeedRestoreController extends Controller
         ];
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Reservations, reservation_rooms, check_ins, check_in_pax, folio_charges
-    |--------------------------------------------------------------------------
-    */
 
     /**
      * @param  array<int, Guest>  $guests
@@ -595,8 +455,6 @@ class DevSeedRestoreController extends Controller
         $roomOccupancy = [];
         $meta = [];
 
-        // Which of the checked-out stays get billed — see the docblock on
-        // seedBillsAndSettlements() for why it is not all of them.
         $checkedOutIndexes = [];
         foreach ($plan['rows'] as $i => $row) {
             if ($row['category'] === 'checked_out') {
@@ -609,13 +467,6 @@ class DevSeedRestoreController extends Controller
         ));
 
         foreach ($plan['rows'] as $i => $row) {
-            // Its own savepoint: if anything below fails partway through —
-            // most importantly, if pickRoom() cannot find a free room for a
-            // checked_out/in_house row — this rolls back just this one
-            // reservation rather than leaving a half-written Reservation
-            // (status still 'confirmed') and a roomless ReservationRoom
-            // behind. That exact combination is the bug this class exists to
-            // avoid, so it must never survive a failed iteration here.
             DB::beginTransaction();
 
             try {
@@ -757,9 +608,6 @@ class DevSeedRestoreController extends Controller
 
                     $this->addExtraPax($checkIn, $pax, $errors, $counts);
 
-                    // Real business logic, not a hand-set status: the same
-                    // method the check-in screen calls once every room on the
-                    // booking has arrived.
                     $reservation->refreshCheckInStatus();
 
                     $this->postFolioNights(
@@ -769,8 +617,6 @@ class DevSeedRestoreController extends Controller
 
                     if ($row['category'] === 'checked_out') {
                         $checkIn->update(['status' => 'checked_out']);
-                        // Same method the checkout screen calls — gives the
-                        // room back and closes the booking.
                         $reservation->refreshCheckOutStatus();
                     }
                 } elseif ($row['category'] === 'no_show') {
@@ -785,8 +631,6 @@ class DevSeedRestoreController extends Controller
                     $reservation->update(['status' => $row['status']]);
                 }
 
-                // Re-adds the header totals from the rows actually stored —
-                // same method the booking screen calls after editing a grid.
                 $reservation->refreshTotals();
 
                 $meta[] = [
@@ -819,8 +663,6 @@ class DevSeedRestoreController extends Controller
             $base = $roomWithRent ? (float) $roomWithRent->base_rent : 2500.0;
         }
 
-        // A little day-to-day variance rather than every room on this type
-        // costing an identical, suspiciously round figure.
         $variance = random_int(-8, 12) / 100;
 
         return round(max(500, $base * (1 + $variance)), -1);
@@ -928,11 +770,6 @@ class DevSeedRestoreController extends Controller
         }
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Advance deposits
-    |--------------------------------------------------------------------------
-    */
 
     /** @param  list<array<string, mixed>>  $meta */
     private function seedAdvanceDeposits(int $branchId, array $meta, array $masters, array &$errors, array &$counts): void
@@ -943,9 +780,6 @@ class DevSeedRestoreController extends Controller
             $byCategory[$row['category']][] = $row['reservation_id'];
         }
 
-        // Built as an *eligibility* pool, then cycled to exactly the target —
-        // this adapts to whatever the actual category counts turned out to
-        // be (see buildReservationPlan()) instead of assuming fixed numbers.
         $eligible = array_merge(
             $byCategory['future'],
             $byCategory['in_house'],
@@ -985,8 +819,6 @@ class DevSeedRestoreController extends Controller
             }
         }
 
-        // The reservation header's advance_paid is a stored sum — recompute
-        // it now that every deposit exists, once per reservation touched.
         foreach (array_unique($queue) as $reservationId) {
             try {
                 Reservation::find($reservationId)?->refreshAdvancePaid();
@@ -1003,17 +835,6 @@ class DevSeedRestoreController extends Controller
     */
 
     /**
-     * Every checked-out stay *could* have a bill — in the real app it always
-     * does, checkout is what creates one. Here it is exactly TARGET_BILLS of
-     * them, a random subset when there are more checked-out stays than that
-     * (there are: 106 against a target of 100) and all of them if there are
-     * fewer. Capping it this way, rather than billing every checked-out stay,
-     * is what keeps the bill count on the exact figure the original run
-     * reported without forcing check-ins away from their own target (116) or
-     * the in-house slice away from "comfortably under the room count". A
-     * checked-out folio with no bill yet reads, at worst, as one still
-     * waiting on the night audit — not as a broken row.
-     *
      * @param  list<array<string, mixed>>  $meta
      */
     private function seedBillsAndSettlements(int $branchId, array $meta, array $masters, array &$errors, array &$counts): void
@@ -1080,9 +901,6 @@ class DevSeedRestoreController extends Controller
             return;
         }
 
-        // Most settle in one line; roughly one in six splits across two pay
-        // modes, the same "part card, part cash" pattern the checkout screen
-        // is built for.
         $split = random_int(1, 100) <= 15;
         $portions = $split ? [round($paid * 0.6, 2), 0] : [$paid];
 
@@ -1121,11 +939,6 @@ class DevSeedRestoreController extends Controller
         }
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Guest CRM — recompute, never hand-set
-    |--------------------------------------------------------------------------
-    */
 
     /** @param  array<int, Guest>  $guests */
     private function recountGuests(array $guests, array &$errors): void
@@ -1138,12 +951,6 @@ class DevSeedRestoreController extends Controller
             }
         }
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Accounting vouchers
-    |--------------------------------------------------------------------------
-    */
 
     /** @return list<string> names of any fallback ledgers this had to create */
     private function seedVouchers(int $branchId, array $masters, array &$errors, array &$counts): array
@@ -1188,12 +995,6 @@ class DevSeedRestoreController extends Controller
             $fallback[] = 'ledger: ' . $l->name . ' (expense)';
         }
 
-        // Best-effort: a vendor's ledger is a nice-to-have for a Payment or
-        // Journal voucher (a real vendor bill rather than a generic expense
-        // line), never a requirement — if the vendors table or its ledger_id
-        // column is not there for any reason, this just falls back to the
-        // expense/income ledgers instead, not to a hard failure that would
-        // otherwise take the whole voucher phase down with it.
         try {
             $vendorLedgerIds = DB::table('vendors')->whereNotNull('ledger_id')->pluck('ledger_id');
             $vendorLedgers = $vendorLedgerIds->isEmpty()
@@ -1291,12 +1092,6 @@ class DevSeedRestoreController extends Controller
 
         return Ledger::query()->forBranch($branchId)->active()->whereIn('account_group_id', $groupIds)->get();
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | POS orders
-    |--------------------------------------------------------------------------
-    */
 
     /** @return list<string> names of any fallback POS masters this had to create */
     private function seedPosOrders(int $branchId, array $masters, Collection $rooms, array &$errors, array &$counts): array
@@ -1511,19 +1306,7 @@ class DevSeedRestoreController extends Controller
         ]);
         $counts['pos_payments']++;
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Small utilities
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * A handful of "regular" guests (the first 30) are weighted to appear far
-     * more often than the rest, so GuestCrm::recount() has something to work
-     * with — a hotel where every guest stayed exactly once never produces a
-     * Gold or Platinum tier, and the CRM screens would have nothing to show.
-     *
      * @return list<int> guest array indexes, ready for array_rand()
      */
     private function weightedGuestPool(int $guestCount): array
@@ -1544,11 +1327,6 @@ class DevSeedRestoreController extends Controller
     }
 
     /**
-     * Repeats (and reshuffles) a pool until it has exactly $target entries.
-     * Used both to turn a small eligibility list into a larger exact count
-     * (advance deposits) and to shuffle an already-exact proportion list
-     * (voucher types, POS statuses) without changing its size.
-     *
      * @param  list<mixed>  $pool
      * @return list<mixed>
      */
@@ -1598,10 +1376,6 @@ class DevSeedRestoreController extends Controller
     /** @return array{pay_mode_id: ?int, pay_type: string, card_type: ?string, card_name: ?string, card_last4: ?string, reference_no: ?string} */
     private function paymentLine(?PayMode $mode): array
     {
-        // No PayMode master configured at all is a real possibility on a
-        // fresh property — pay_mode_id is nullable throughout for exactly
-        // this reason, so this still returns a usable (cash) line rather
-        // than reading a property off null.
         $type = $mode?->type ?? 'cash';
         $out = ['pay_mode_id' => $mode?->id, 'card_type' => null, 'card_name' => null, 'card_last4' => null, 'reference_no' => null];
 

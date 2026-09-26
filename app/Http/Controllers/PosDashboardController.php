@@ -11,25 +11,13 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * POS Dashboard — one screen for what the outlets sold.
- *
- * Every figure comes off `App\Support\PosDashboard`, so a report built on the
- * same numbers later cannot drift from what the manager saw here.
- *
- * The screen is deliberately honest about an empty house: with no POS entries
- * yet every tile reads zero and every chart says so in words, rather than
- * drawing an axis over nothing.
- */
+
 class PosDashboardController extends Controller
 {
-    /** GET point-of-sale/dashboard */
     public function index(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
 
-        // Default to the month so far, which is the question a manager opens
-        // this screen to ask.
         $from = $this->date($request->string('from')->toString(), now()->startOfMonth());
         $to = $this->date($request->string('to')->toString(), now());
 
@@ -47,7 +35,6 @@ class PosDashboardController extends Controller
             'lowItems' => $data->lowItems(),
             'outletCount' => Outlet::query()->forBranch($branchId)->active()->count(),
             'typeLabels' => PosOrder::TYPES,
-            // Quick ranges, so the common questions are one click.
             'presets' => [
                 'Today' => [now()->toDateString(), now()->toDateString()],
                 'Last 7 days' => [now()->subDays(6)->toDateString(), now()->toDateString()],
@@ -60,7 +47,6 @@ class PosDashboardController extends Controller
         ]);
     }
 
-    /** A date from the query string, or a sensible default. */
     private function date(string $value, $fallback): string
     {
         return rescue(

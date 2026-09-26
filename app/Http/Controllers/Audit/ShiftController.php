@@ -12,19 +12,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * The cashier's own screen, and the manager's view of everybody's.
- *
- * A shift close is the one moment in the day when a person is asked to put a
- * number against what they are holding, so the screen shows what the books
- * expect only AFTER they have typed what they counted — the count comes from
- * the drawer, not from the screen. That is the whole reason a blind count
- * exists, and a screen that shows the expected figure first quietly turns
- * every close into a transcription exercise.
- */
 class ShiftController extends Controller
 {
-    /** GET shift/my-shift */
     public function mine(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -50,7 +39,6 @@ class ShiftController extends Controller
         ]);
     }
 
-    /** POST shift/my-shift/open */
     public function open(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -77,13 +65,6 @@ class ShiftController extends Controller
             ->with('status', 'Shift ' . $shift->shift_no . ' is open.');
     }
 
-    /**
-     * POST shift/my-shift/close
-     *
-     * The counted figures arrive as `counted[<pay mode id>]`. A mode left
-     * blank is zero — the screen says so beside the boxes, because a close
-     * that silently skipped the empty ones would balance for the wrong reason.
-     */
     public function close(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -116,7 +97,6 @@ class ShiftController extends Controller
             ->with('status', 'Shift ' . $closed->shift_no . ' closed.');
     }
 
-    /** GET shift/reports */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -148,7 +128,6 @@ class ShiftController extends Controller
         ]);
     }
 
-    /** GET shift/reports/{shift} */
     public function show(Request $request, CashierShift $shift): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -157,7 +136,6 @@ class ShiftController extends Controller
         return view('shift.show', $this->report($shift) + ['print' => false]);
     }
 
-    /** GET shift/reports/{shift}/print */
     public function print(Request $request, CashierShift $shift): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -166,13 +144,6 @@ class ShiftController extends Controller
         return view('shift.print', $this->report($shift));
     }
 
-    /**
-     * POST shift/reports/{shift}/close
-     *
-     * A manager closing somebody else's drawer, because the cashier has gone
-     * home with it open. It is an edit rather than an add: the shift already
-     * exists, and what changes is whose name is on the close.
-     */
     public function closeOther(Request $request, CashierShift $shift): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -198,7 +169,6 @@ class ShiftController extends Controller
         return back()->with('status', 'Shift ' . $shift->shift_no . ' closed on behalf of ' . $shift->cashier . '.');
     }
 
-    /** Everything both the screen and the printout need. */
     private function report(CashierShift $shift): array
     {
         $figures = Shifts::frozenOrLive($shift);
@@ -219,11 +189,6 @@ class ShiftController extends Controller
     }
 
     /**
-     * The window the list is looking at — today by default.
-     *
-     * A shift list is read at the end of a day about that day, so it does not
-     * open on the month the way a revenue report does.
-     *
      * @return array{0: string, 1: string}
      */
     private function range(Request $request): array

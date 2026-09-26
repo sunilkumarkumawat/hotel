@@ -18,21 +18,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Every piece of store paperwork, through one controller.
- *
- * A purchase order, a goods receipt, an issue to the kitchen, a wastage note
- * and a stock correction are the same screen with different words on it, so
- * they are the same code with a `kind` in the URL. What differs between them —
- * which fields matter, which way the stock moves, what the buttons say — is
- * stated once, in `shape()`, rather than five times in five controllers.
- *
- * Nothing here moves stock. Saving writes a draft; posting is a separate,
- * deliberate act, and posting is the only thing that touches the ledger.
- */
+
 class DocController extends Controller
 {
-    /** The five kinds, and what is true about each. */
     private const SHAPE = [
         'po' => [
             'label' => 'Purchase Order', 'plural' => 'Purchase Orders',
@@ -85,29 +73,13 @@ class DocController extends Controller
         ],
     ];
 
-    /**
-     * The sidebar (and the permission matrix) know three of these documents
-     * by the same long, readable slug as their permission key —
-     * "purchase-orders", not "po". The database enum and this controller's
-     * own internals have always used the short code. Rather than rename
-     * either side — which would mean an enum migration on one hand, or
-     * resetting every role's permission grants on the other — a document
-     * reached by its long slug is normalised to the short one right here,
-     * before anything else runs. Every link this controller itself renders
-     * already uses the short form, so there is nothing to translate on the
-     * way back out.
-     */
     private const ALIASES = [
         'purchase-orders' => 'po',
         'issues' => 'issue',
         'adjustments' => 'adjustment',
-        // The nav link and the permission both say "transfer" — a bare visit
-        // to it means "send", the same way a bare visit to Purchase Orders
-        // means raising one rather than receiving against one.
         'transfer' => 'transfer_out',
     ];
 
-    /** GET store/{kind} */
     public function index(Request $request, string $kind): View
     {
         $kind = self::ALIASES[$kind] ?? $kind;
@@ -138,37 +110,20 @@ class DocController extends Controller
         ]);
     }
 
-    /** GET store/{kind}/new */
     public function create(Request $request, string $kind): View|RedirectResponse
     {
         $kind = self::ALIASES[$kind] ?? $kind;
         $shape = $this->shape($kind, 'add');
         $branchId = (int) Helper::getActiveBranchId();
 
-        /*
-         * Nothing to receive without saying which transfer — sent here with
-         * no ?from=, the useful thing is the list of what is waiting, not an
-         * empty items form nobody asked for.
-         */
         if ($kind === 'transfer_in' && ! $request->integer('from')) {
             return redirect()->route('store.transfer.inbox');
         }
 
-        /*
-         * A goods receipt raised from a purchase order arrives pre-filled with
-         * what is still outstanding on it, so the storekeeper types only what
-         * differs. Short deliveries are the normal case, not the exception.
-         */
         $po = $kind === 'grn' && $request->integer('from')
             ? StoreDoc::forBranch($branchId)->ofKind('po')->with('items.item')->find($request->integer('from'))
             : null;
 
-        /*
-         * The transfer_out equivalent of $po above — except it belongs to
-         * ANOTHER branch (the one that sent it), so it is looked up without
-         * forBranch(), and ownership is checked the other way round: this
-         * outlet must be the one it was addressed to.
-         */
         $transferOut = null;
 
         if ($kind === 'transfer_in' && $request->integer('from')) {
@@ -207,8 +162,6 @@ class DocController extends Controller
             'nextNo' => Store::nextNo($branchId, $kind),
         ]);
     }
-
-    /** GET store/{kind}/{doc}/edit */
     public function edit(string $kind, StoreDoc $doc): View
     {
         $kind = self::ALIASES[$kind] ?? $kind;
@@ -226,8 +179,6 @@ class DocController extends Controller
             'shape' => $shape,
             'doc' => $doc->load('items'),
             'po' => $kind === 'grn' ? $doc->against : null,
-            // Editing a draft transfer_in needs the same "receiving against"
-            // alert and branches list create() gives it — see the note there.
             'transferOut' => $kind === 'transfer_in' ? $doc->against?->load('branch') : null,
             'prefill' => $doc->items->map(fn ($line) => [
                 'store_item_id' => $line->store_item_id,
@@ -246,7 +197,6 @@ class DocController extends Controller
         ]);
     }
 
-    /** POST store/{kind}  ·  PUT store/{kind}/{doc} */
     public function save(Request $request, string $kind, ?StoreDoc $doc = null): RedirectResponse
     {
         $kind = self::ALIASES[$kind] ?? $kind;
@@ -261,21 +211,9 @@ class DocController extends Controller
             $doc = null;
         }
 
-        // An adjustment may take stock away, so its quantity is the one that
-        // is allowed to be negative.
         $qtyRule = $kind === 'adjustment'
             ? ['required', 'numeric', 'min:-999999', 'max:999999', 'not_in:0']
             : ['required', 'numeric', 'min:0.001', 'max:999999'];
-
-        /*
-         * The form always shows a few blank rows to type into — three for a
-         * new document. Most documents don't need all of them, and leaving
-         * one empty is not a mistake, so a row nobody put anything into is
-         * dropped here rather than forcing a manual "remove this line" click
-         * before the document can be saved at all. A row the person did
-         * start — an item chosen, or just a quantity typed — still has to
-         * be finished; only a row untouched in both fields is silently gone.
-         */
         $request->merge([
             'lines' => collect($request->input('lines', []))
                 ->filter(fn ($line) => filled($line['store_item_id'] ?? null) || filled($line['qty'] ?? null))
@@ -292,9 +230,6 @@ class DocController extends Controller
             'invoice_date' => ['nullable', 'date'],
             'expected_on' => ['nullable', 'date'],
             'against_id' => ['nullable', 'integer'],
-            // Required to send a transfer, meaningless for the other six kinds
-            // — 'nullable' and 'required' don't mix, so the condition picks
-            // one or the other rather than stacking both.
             'to_branch_id' => [
                 $kind === 'transfer_out' ? 'required' : 'nullable',
                 'integer', Rule::exists('branches', 'id'), Rule::notIn([$branchId]),
@@ -309,28 +244,12 @@ class DocController extends Controller
             'lines.*.tax_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'lines.*.remark' => ['nullable', 'string', 'max:255'],
         ]);
-
-        /*
-         * The same item twice on one document is almost always a typo, and it
-         * makes a purchase order impossible to settle — two lines for the same
-         * thing, and no way to say which the delivery filled.
-         */
         $ids = array_column($data['lines'], 'store_item_id');
 
         if (count($ids) !== count(array_unique($ids))) {
             return back()->withInput()->with('error',
                 'The same item is on this document more than once. Put the whole quantity on one line.');
         }
-
-        /*
-         * A transfer can only carry an item the destination outlet is also
-         * set up to use. Nothing else guards this: the receiving screen
-         * builds its item list from the destination branch (StoreItem::
-         * forBranch()), so a line here it can't see is a line that arrives
-         * with no way to receive it — caught here, at the only point that
-         * already knows both branches, rather than as a confusing blank
-         * dropdown on the other outlet's screen later.
-         */
         if ($kind === 'transfer_out') {
             $available = StoreItem::whereIn('id', $ids)
                 ->where(function ($q) use ($data) {
@@ -406,13 +325,6 @@ class DocController extends Controller
 
             return $doc;
         });
-
-        /*
-         * A purchase order is a commitment even as a draft — unlike the
-         * other four, which do nothing until posted — so raising one is
-         * worth a heads-up on its own, separate from the "it was placed"
-         * notification post() sends later.
-         */
         if ($isNew && $kind === 'po') {
             Notify::event('store.po.created')
                 ->title('Purchase order raised — ' . $doc->doc_no)
@@ -422,13 +334,6 @@ class DocController extends Controller
                 ->send();
         }
 
-        /*
-         * "Save & post" in one click, for the common case of somebody who
-         * already knows this document is right and does not want a second
-         * screen and a second confirmation just to say so. Choosing that
-         * button over "Save as draft" is itself the deliberate act, so
-         * nothing further asks to make sure.
-         */
         if ($request->input('commit') === 'post') {
             try {
                 $result = $this->postAndNotify($kind, $doc, $request->user()?->user_id);
@@ -449,7 +354,6 @@ class DocController extends Controller
                 . 'Nothing has moved yet — post it when you are happy with it.');
     }
 
-    /** GET store/{kind}/{doc} */
     public function show(string $kind, StoreDoc $doc): View
     {
         $kind = self::ALIASES[$kind] ?? $kind;
@@ -463,24 +367,9 @@ class DocController extends Controller
             'shape' => $shape,
             'doc' => $doc->load(['items.item', 'vendor', 'poster', 'against.branch', 'receipts', 'toBranch']),
             'branch' => Helper::activeBranch(),
-            // Viewing a transfer is shared between two branches; editing,
-            // posting and cancelling stay the owning branch's alone. The
-            // view needs to know which one this is, so it doesn't offer a
-            // button the counterpart branch would only get a 404 from.
             'isOwner' => (int) $doc->branch_id === $branchId,
         ]);
     }
-
-    /**
-     * Whether this branch is allowed to look at this document.
-     *
-     * Every other kind is one branch's own paperwork, private to it. A
-     * transfer is the one exception — it names two branches on purpose, so
-     * both get to see it: the sender while it's on its way, the receiver
-     * once it's their turn to act on it. Nothing else (editing, posting,
-     * cancelling) gets this relaxation — those stay the owning branch's
-     * alone, checked separately wherever they happen.
-     */
     private function canSee(StoreDoc $doc, int $branchId): bool
     {
         if ((int) $doc->branch_id === $branchId) {
@@ -494,14 +383,9 @@ class DocController extends Controller
         };
     }
 
-    /** POST store/{kind}/{doc}/post */
     public function post(Request $request, string $kind, StoreDoc $doc): RedirectResponse
     {
         $kind = self::ALIASES[$kind] ?? $kind;
-
-        // Posting moves stock, so it sits behind `add` rather than `edit` — a
-        // clerk who may fix a typo on a draft is not automatically somebody
-        // who may move the store.
         $this->shape($kind, 'add');
         abort_unless((int) $doc->branch_id === (int) Helper::getActiveBranchId() && $doc->kind === $kind, 404);
 
@@ -515,10 +399,6 @@ class DocController extends Controller
     }
 
     /**
-     * Post a document and tell the world about it — the guts shared by the
-     * standalone "Post" action above and the "Save & post" shortcut on the
-     * form below, so the two paths cannot quietly drift apart.
-     *
      * @return array{tone: string, message: string}
      *
      * @throws PostingRefused when the document is not in a state to be posted
@@ -529,7 +409,6 @@ class DocController extends Controller
 
         $doc->refresh();
 
-        // Somebody should be told before the kitchen finds out at dinner.
         $short = $doc->items
             ->map(fn ($line) => $line->item)
             ->filter(fn ($item) => $item && (float) $item->fresh()->current_qty < 0);
@@ -552,7 +431,6 @@ class DocController extends Controller
         return ['tone' => 'status', 'message' => $message];
     }
 
-    /** DELETE store/{kind}/{doc} */
     public function cancel(Request $request, string $kind, StoreDoc $doc): RedirectResponse
     {
         $kind = self::ALIASES[$kind] ?? $kind;
@@ -569,15 +447,6 @@ class DocController extends Controller
             . ($rows ? ', and ' . $rows . ' movements were reversed. The original rows stay in the ledger.' : '.'));
     }
 
-    /**
-     * What this kind of document is, and whether the user may do this to it.
-     *
-     * The permission lives here rather than in route middleware because it
-     * depends on BOTH the kind and the action — receiving stock and writing it
-     * off are different levels of trust, and a middleware string cannot say
-     * "whichever key this kind maps to". Every action goes through here, so
-     * there is no way to add one and forget the check.
-     */
     private function shape(string $kind, string $action = 'view'): array
     {
         abort_unless(isset(self::SHAPE[$kind]), 404);

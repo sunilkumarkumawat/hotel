@@ -54,7 +54,8 @@
         <x-stat label="Balance" :value="'₹' . number_format($reservation->balance, 2)" icon="wallet" tone="info" />
     </div>
 
-    <form method="POST" action="{{ route('front-office.check-in-guest.store') }}" id="check-in-form" data-check-in>
+    <form method="POST" action="{{ route('front-office.check-in-guest.store') }}" id="check-in-form"
+          enctype="multipart/form-data" data-check-in>
         @csrf
         <input type="hidden" name="reservation_id" value="{{ $reservation->id }}" />
 
@@ -136,6 +137,76 @@
                     <x-field label="Check-in Time" name="checkin_time">
                         <x-input name="checkin_time" type="time" :value="old('checkin_time', now()->format('H:i'))" />
                     </x-field>
+                </div>
+            </x-card>
+        </div>
+
+        {{-- ── ID Proof ──────────────────────────────────────────────────── --}}
+        <div class="nv-mt">
+            <x-card title="ID Proof"
+                    subtitle="The ID checked at the desk — feeds the police register and, for a foreign guest, the passport onto Form C.">
+                <div class="nv-form-grid">
+                    <x-field label="ID Type" name="id_type">
+                        <x-select name="id_type" :options="$idTypes" :selected="$old('id_type')" placeholder="Select" />
+                    </x-field>
+
+                    <x-field label="ID Number" name="id_number">
+                        <x-input name="id_number" :value="$old('id_number')" placeholder="As printed on the card" />
+                    </x-field>
+                </div>
+
+                {{--
+                    One hidden file input carries the photo however it was
+                    taken — a native camera/gallery pick on a phone (that is
+                    what `capture` triggers) or a live desktop capture that
+                    check-in.js hands to this same input as a File, via
+                    DataTransfer, once it exists. Either way, store() sees one
+                    ordinary uploaded file and does not need to know which
+                    path it came from.
+                --}}
+                <div class="nv-id-photo" data-id-photo>
+                    <div class="nv-id-photo-preview" data-id-photo-preview>
+                        <video data-id-photo-video autoplay playsinline muted hidden></video>
+
+                        <img data-id-photo-img alt="ID proof photo" hidden />
+
+                        <div class="nv-id-photo-empty" data-id-photo-empty>
+                            <x-icon name="camera" />
+                            <span>No ID photo yet</span>
+                        </div>
+                    </div>
+
+                    <div class="nv-id-photo-actions">
+                        <button type="button" class="nv-btn nv-btn-outline nv-btn-sm" data-id-photo-camera-btn hidden>
+                            <x-icon name="camera" /> Use Camera
+                        </button>
+
+                        <button type="button" class="nv-btn nv-btn-primary nv-btn-sm" data-id-photo-capture-btn hidden>
+                            <x-icon name="check" /> Capture
+                        </button>
+
+                        <button type="button" class="nv-btn nv-btn-ghost nv-btn-sm" data-id-photo-cancel-btn hidden>
+                            <x-icon name="x" /> Cancel
+                        </button>
+
+                        <label class="nv-btn nv-btn-outline nv-btn-sm" for="id_photo" data-id-photo-choose-btn>
+                            <x-icon name="upload" /> Choose File
+                        </label>
+                        <input type="file" name="id_photo" id="id_photo" accept="image/*" capture="environment"
+                               data-id-photo-input hidden />
+
+                        <button type="button" class="nv-btn nv-btn-ghost nv-btn-sm" data-id-photo-remove-btn hidden>
+                            <x-icon name="trash" /> Remove
+                        </button>
+                    </div>
+
+                    <p class="nv-help" data-id-photo-status>
+                        A clear photo of the front of the card — from the camera on a phone, or Choose File on a desktop.
+                    </p>
+
+                    @error('id_photo')
+                        <p class="nv-error">{{ $message }}</p>
+                    @enderror
                 </div>
             </x-card>
         </div>

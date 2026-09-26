@@ -263,3 +263,199 @@
 
     renderPage();
 })();
+
+/*
+|------------------------------------------------------------------------------
+| Check in Guest — the ID Proof photo
+|------------------------------------------------------------------------------
+| Independent of the allotment popup above — its own guard, its own scope —
+| so nothing here depends on window.__checkIn existing.
+|
+| One hidden <input type="file" name="id_photo"> is what actually travels
+| with the form, however the picture got there. Choosing a file — which on a
+| phone is the native camera the `capture` attribute opens — fills it the
+| ordinary way. The live desktop camera below fills the same input by
+| building a File from a captured frame and handing it over through a
+| DataTransfer, the only way JS is allowed to set what a file input holds.
+| Either way, store() on the server sees one ordinary uploaded file and never
+| needs to know which path it came from.
+*/
+
+(function () {
+    'use strict';
+
+    const widget = document.querySelector('[data-id-photo]');
+    if (!widget) return;
+
+    const $ = (sel) => widget.querySelector(sel);
+
+    const input = $('[data-id-photo-input]');
+    const img = $('[data-id-photo-img]');
+    const empty = $('[data-id-photo-empty]');
+    const video = $('[data-id-photo-video]');
+    const status = $('[data-id-photo-status]');
+    const cameraBtn = $('[data-id-photo-camera-btn]');
+    const captureBtn = $('[data-id-photo-capture-btn]');
+    const cancelBtn = $('[data-id-photo-cancel-btn]');
+    const chooseBtn = $('[data-id-photo-choose-btn]');
+    const removeBtn = $('[data-id-photo-remove-btn]');
+
+    if (!input || !img || !empty || !video || !cameraBtn || !captureBtn || !cancelBtn || !chooseBtn || !removeBtn) {
+        return;
+    }
+
+    const defaultStatus = status ? status.textContent.trim() : '';
+    let stream = null;
+    let objectUrl = null;
+
+    function setStatus(text) {
+        if (status) status.textContent = text || defaultStatus;
+    }
+
+    /* ── Preview ─────────────────────────────────────────────────────────── */
+
+    function showImage(file) {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = URL.createObjectURL(file);
+
+        img.src = objectUrl;
+        img.hidden = false;
+        empty.hidden = true;
+        video.hidden = true;
+        removeBtn.hidden = false;
+    }
+
+    function showEmpty() {
+        if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
+        }
+
+        img.hidden = true;
+        img.removeAttribute('src');
+        video.hidden = true;
+        empty.hidden = false;
+        removeBtn.hidden = true;
+    }
+
+    /* ── Choose File (native camera on a phone, a file picker on a desktop) ── */
+
+    input.addEventListener('change', function () {
+        const file = input.files && input.files[0];
+
+        if (file) {
+            showImage(file);
+            setStatus('Photo added — Save the check-in to keep it.');
+        }
+    });
+
+    removeBtn.addEventListener('click', function () {
+        input.value = '';
+        showEmpty();
+        setStatus(defaultStatus);
+    });
+
+    /* ── Live desktop camera ─────────────────────────────────────────────
+       Offered only where it can actually work: getUserMedia needs a secure
+       context (HTTPS, or localhost), which a front desk reached over plain
+       HTTP on the LAN is not. Choose File above is what a phone already uses
+       for its native camera, so nothing real is lost by hiding this button
+       rather than showing one that would just fail when pressed. */
+
+    const canUseCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    if (canUseCamera) cameraBtn.hidden = false;
+
+    function stopStream() {
+        if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+            stream = null;
+        }
+        video.srcObject = null;
+    }
+
+    function setCameraMode(on) {
+        cameraBtn.hidden = on || !canUseCamera;
+        chooseBtn.hidden = on;
+        captureBtn.hidden = !on;
+        cancelBtn.hidden = !on;
+    }
+
+    cameraBtn.addEventListener('click', function () {
+        if (cameraBtn.disabled) return;
+        cameraBtn.disabled = true;
+
+        navigator.mediaDevices
+            .getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+            .then(function (s) {
+                cameraBtn.disabled = false;
+                stream = s;
+                video.srcObject = stream;
+                video.hidden = false;
+                img.hidden = true;
+                empty.hidden = true;
+                setCameraMode(true);
+                setStatus('Line the card up in the frame, then press Capture.');
+            })
+            .catch(function () {
+                // A desktop with no camera, or the guest said no — Choose
+                // File keeps working either way, so this fails quietly
+                // rather than with a dialog, and does not offer the button
+                // again once it is known not to work here.
+                cameraBtn.disabled = false;
+                cameraBtn.hidden = true;
+                setStatus('Camera not available here — use Choose File instead.');
+            });
+    });
+
+    captureBtn.addEventListener('click', function () {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 960;
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        canvas.toBlob(
+            function (blob) {
+                if (!blob) {
+                    setStatus('Could not capture that — try again or use Choose File.');
+                    return;
+                }
+
+                const file = new File([blob], 'id-proof.jpg', { type: 'image/jpeg' });
+
+                // The only way to hand a JS-built file to a real <input
+                // type="file">, so the one input still carries the photo
+                // regardless of which path put it there.
+                const transfer = new DataTransfer();
+                transfer.items.add(file);
+                input.files = transfer.files;
+
+                stopStream();
+                setCameraMode(false);
+                showImage(file);
+                setStatus('Photo captured — Save the check-in to keep it.');
+            },
+            'image/jpeg',
+            0.9
+        );
+    });
+
+    cancelBtn.addEventListener('click', function () {
+        stopStream();
+        setCameraMode(false);
+        video.hidden = true;
+
+        // Cancelling out of the camera returns to whatever was there before
+        // — a file already chosen still sits in the input untouched, so it
+        // is the preview that is restored, not the file itself.
+        if (input.files && input.files[0]) {
+            img.hidden = false;
+        } else {
+            showEmpty();
+        }
+
+        setStatus(defaultStatus);
+    });
+
+    // Leaving the page mid-capture should not leave the camera light on.
+    window.addEventListener('beforeunload', stopStream);
+})();

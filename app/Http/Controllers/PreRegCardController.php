@@ -10,19 +10,7 @@ use App\Models\Reservation\ReservationRoom;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * Pre Reg Card — the Guest Registration Card the guest signs at the desk.
- *
- * Two ways it gets used, and both matter:
- *
- *  - **Filled** from a booking, so the guest only checks the details and
- *    signs. This is the point of a *pre*-registration card: the desk prints it
- *    before the guest walks in.
- *  - **Blank**, to keep a pad of them under the counter for walk-ins.
- *
- * Both print from one template, so a field added to the card can never appear
- * on one and not the other.
- */
+
 class PreRegCardController extends Controller
 {
     public function index(Request $request): View
@@ -35,8 +23,6 @@ class PreRegCardController extends Controller
             'to' => $request->string('to')->toString() ?: today()->addDays(6)->toDateString(),
         ];
 
-        // Bookings arriving in the window — the pile the desk prints each
-        // morning — newest booking first within a day.
         $arrivals = Reservation::query()
             ->where('branch_id', $branchId)
             ->whereNotIn('status', ['cancelled', 'no_show'])
@@ -57,7 +43,6 @@ class PreRegCardController extends Controller
         ]);
     }
 
-    /** The card for one booking, filled in. */
     public function show(Reservation $reservation): View
     {
         abort_unless($reservation->branch_id === Helper::getActiveBranchId(), 404);
@@ -77,7 +62,6 @@ class PreRegCardController extends Controller
         ]);
     }
 
-    /** An empty card, for the pad under the counter. */
     public function blank(): View
     {
         $branch = $this->branch();
@@ -89,13 +73,6 @@ class PreRegCardController extends Controller
             'back' => route('front-office.pre-reg-card'),
         ]);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     private function branch(): Branch
     {
         $branch = Helper::activeBranch();
@@ -106,11 +83,6 @@ class PreRegCardController extends Controller
     }
 
     /**
-     * The branch's own terms, one per line.
-     *
-     * Empty is a real answer — the card then prints ruled lines and says where
-     * to set them, rather than inventing house rules the hotel never agreed to.
-     *
      * @return list<string>
      */
     private function terms(Branch $branch): array
@@ -123,13 +95,6 @@ class PreRegCardController extends Controller
     }
 
     /**
-     * Everything the card prints for one booking.
-     *
-     * Fields the system genuinely does not hold — the foreigner ones, C Form
-     * No. — are left empty on purpose so the desk fills them in by hand. A
-     * guessed value on a document that goes to the police is worse than a
-     * blank line.
-     *
      * @return array<string, mixed>
      */
     private function card(Reservation $reservation): array
@@ -151,9 +116,6 @@ class PreRegCardController extends Controller
             'company' => $reservation->company?->name,
             'booked_by' => $reservation->bookedBy?->name,
             'company_gst_no' => $reservation->company_gst_no,
-
-            // Foreigner block — the hotel fills these at the desk off the
-            // passport, so they print as blank rules.
             'arrival_in_india' => null,
             'c_form_no' => null,
 
@@ -166,8 +128,6 @@ class PreRegCardController extends Controller
             'billing_instruction' => $reservation->billingInstruction?->name,
 
             'rooms' => $reservation->rooms->map(fn (ReservationRoom $row) => [
-                // A row for several rooms names none of them until the guests
-                // arrive, so show what has actually been allotted.
                 'room_no' => $row->room_no ?: $this->allottedNumbers($row),
                 'occupancy' => (int) $row->male + (int) $row->female + (int) $row->child,
                 'category' => $row->category?->name ?? $row->type?->name,
@@ -180,7 +140,6 @@ class PreRegCardController extends Controller
         ];
     }
 
-    /** Room numbers the front office has given this line, if any. */
     private function allottedNumbers(ReservationRoom $row): ?string
     {
         $numbers = $row->checkIns

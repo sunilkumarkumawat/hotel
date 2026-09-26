@@ -10,25 +10,11 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * The rate calendar — every room type's price for every night, on one screen.
- *
- * This is the screen that makes a rate sheet arguable. A hotel can load
- * seasons, weekend rules and a corporate plan and still have no idea what it
- * is actually charging on the 24th; the grid answers that by running the same
- * engine the booking screen runs, one cell at a time, and printing what comes
- * back.
- *
- * Cells that fell back to the room type's base rent are marked. That is the
- * point of the screen as much as the prices are: an unmarked wall of numbers
- * would hide the fortnight nobody has priced.
- */
+
 class RateCalendarController extends Controller
 {
-    /** How many nights the grid shows. A fortnight fits; a month needs scrolling. */
     private const SPANS = [14 => 'A fortnight', 31 => 'A month', 62 => 'Two months'];
 
-    /** GET rates/calendar */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();

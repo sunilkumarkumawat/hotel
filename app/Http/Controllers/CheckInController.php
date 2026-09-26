@@ -17,7 +17,9 @@ use App\Models\Master\Room;
 use App\Models\Master\VisitPurpose;
 use App\Models\Reservation\Reservation;
 use App\Models\Reservation\ReservationRoom;
+use App\Support\Compliance;
 use App\Support\Folio;
+use App\Support\FolioRefused;
 use App\Support\GuestMessage;
 use App\Support\Notify;
 use Carbon\CarbonImmutable;
@@ -25,34 +27,15 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Check In Guest — turning a booking into a guest in the building.
- *
- * A booking promises "3 Deluxe rooms"; a check-in says which physical rooms
- * those are and that the guests have arrived. The two are deliberately
- * separate steps: nothing is checked in until somebody presses Save here.
- *
- * Rooms can arrive in batches — two today, one tomorrow — so every screen
- * works in "pending" rooms rather than assuming a booking arrives whole.
- */
 class CheckInController extends Controller
 {
-    /**
-     * GET front-office/check-in-guest?reservation=<id>
-     *
-     * The guest's own details are editable here because the desk usually
-     * corrects them off the ID card at arrival; saving writes them back to
-     * the booking as well.
-     */
+
     public function create(Request $request): View|RedirectResponse
     {
-        /*
-         * The sidebar links straight here, but a check-in is always a check-in
-         * of *something* — with no booking named, send the desk to the list to
-         * pick one rather than showing it a 404.
-         */
+ 
         if (! $request->integer('reservation')) {
             return redirect()->route('reservation.index')
                 ->with('info', 'Pick the booking you want to check in — tick it in the list and press Check In.');
@@ -76,27 +59,13 @@ class CheckInController extends Controller
             'bookedBy' => BookedBy::query()->forBranch()->active()->orderBy('name')->pluck('name', 'id'),
             'businessMarkets' => BusinessMarket::query()->forBranch()->active()->orderBy('name')->pluck('name', 'id'),
             'companies' => Company::query()->forBranch()->active()->orderBy('name')->pluck('name', 'id'),
+            'idTypes' => Compliance::ID_TYPES,
         ]);
     }
 
-    /**
-     * GET front-office/check-in-guest/rooms?row=<reservation_room_id>
-     *
-     * What the Allot Room popup lists: rooms actually free for that row's
-     * nights, in that row's category and type.
-     */
     public function rooms(Request $request): JsonResponse
     {
         $row = $this->row($request->integer('row'));
-
-        // The whole category, not just the booked type. A "Deluxe Triple"
-        // guest can perfectly well be put in a Deluxe Double when that is what
-        // is free — the desk makes that call, so the list has to offer it and
-        // then say plainly which rooms are not the type that was booked.
-        //
-        // The row's own hold is ignored: a booking that already named 201 must
-        // still be able to check into 201, and without this the guest would be
-        // pushed into a different room than the one the calendars show.
         $rooms = Room::query()
             ->forBranch()
             ->availableBetween($row->arrival_date->toDateString(), $row->checkout_date->toDateString(), $row->id)
@@ -129,15 +98,11 @@ class CheckInController extends Controller
                 'category' => $room->category?->name,
                 'type' => $room->type?->name,
                 'housekeeping' => $room->housekeeping_status,
-                // False means the desk is upgrading or downgrading this guest.
                 'as_booked' => ! $row->room_type_id || $room->room_type_id === $row->room_type_id,
             ]),
         ]);
     }
 
-    /**
-     * POST front-office/check-in-guest — the Save that actually checks in.
-     */
     public function store(Request $request): RedirectResponse
     {
         $reservation = $this->reservation($request->integer('reservation_id'));
@@ -148,21 +113,15 @@ class CheckInController extends Controller
         if (is_string($allotments)) {
             return back()->withInput()->with('error', $allotments);
         }
-
-        $folio = DB::transaction(function () use ($reservation, $data, $allotments, $request) {
-            // Read the number inside the transaction so two clerks checking in
-            // at the same moment cannot both take FO-1-0007.
+        $idPhoto = $request->hasFile('id_photo')
+            ? $request->file('id_photo')->store('id-proofs', 'public')
+            : null;
+        try {
+            $folio = DB::transaction(function () use ($reservation, $data, $allotments, $request, $idPhoto) {
             $folio = CheckIn::nextFolio($reservation->branch_id);
 
             $reservation->update($this->guestFields($data));
 
-            /*
-             * A guest who turns up a day late on a one-night booking would
-             * otherwise get a stay of zero nights — and a stay of zero nights
-             * holds no room at all, because every clash test asks whether the
-             * departure is after the arrival. The room would go straight back
-             * on sale with somebody asleep in it. One night is the floor.
-             */
             $earliestDeparture = CarbonImmutable::parse($data['checkin_date'])->addDay()->toDateString();
 
             foreach ($allotments as $allotment) {
@@ -181,6 +140,9 @@ class CheckInController extends Controller
                         'folio_no' => $folio,
                         'guest_name' => $reservation->guest_name,
                         'mobile' => $reservation->mobile,
+                        'id_type' => $data['id_type'] ?? null,
+                        'id_number' => $data['id_number'] ?? null,
+                        'photo' => $idPhoto,
                         'checkin_date' => $data['checkin_date'],
                         'checkin_time' => $data['checkin_time'] ?: now()->format('H:i'),
                         'expected_checkout_date' => $departure,
@@ -188,15 +150,9 @@ class CheckInController extends Controller
                         'plan_type_id' => $row->plan_type_id,
                         'room_rent' => $row->room_rent,
                         'discount' => $row->discount,
-                        // Carried, not looked up again: the bill has to charge
-                        // the nightly rate this booking was priced at.
                         'plan_charge' => $row->plan_charge,
                         'tax_type' => $row->tax_type,
-                        // Carried across with the rate: a booking taken with no
-                        // tax is checked in with no tax.
                         'tax_choice' => $row->tax_choice,
-                        // The percent that choice worked out to, frozen here so
-                        // a stay keeps the tax it arrived with.
                         'tax_percent' => (float) $row->tax_percent,
                         'male' => $row->male,
                         'female' => $row->female,
@@ -206,21 +162,10 @@ class CheckInController extends Controller
                         'remark' => $data['remark'] ?? null,
                         'created_by' => $request->user()->user_id,
                     ]);
-
-                    // A single-room booking row carries the number of the room
-                    // the guest was actually given — even when the booking had
-                    // named a different one and the desk moved them at arrival.
-                    // Leaving the old number here is what made the calendars
-                    // say 201 while the folio billed 202. Multi-room rows name
-                    // no single room, so the number lives on the check-in only.
                     if ((int) $row->no_of_rooms === 1 && (int) $row->room_id !== (int) $room->id) {
                         $row->update(['room_id' => $room->id, 'room_no' => $room->room_no]);
                     }
 
-                    // Open the folio now rather than at checkout: the nights
-                    // and the services booked with the reservation are money
-                    // the guest already owes, and the desk should be able to
-                    // see the running bill from the moment they arrive.
                     Folio::for($checkIn)->post($request->user()->user_id);
                 }
             }
@@ -228,26 +173,40 @@ class CheckInController extends Controller
             $reservation->refreshCheckInStatus();
 
             return $folio;
-        });
+            });
+        } catch (FolioRefused $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
 
         $rooms = collect($allotments)->sum(fn (array $a) => count($a['rooms']));
         $left = $reservation->fresh()->load('rooms.checkIns')->pendingRooms();
-
-        // The room number on the first stay of this arrival — what the guest
-        // needs on their phone when they walk to the lift.
         $firstRoom = CheckIn::query()
             ->where('branch_id', $reservation->branch_id)
             ->where('folio_no', $folio)
-            ->with('room')
+            ->with(['room.type', 'plan'])
             ->first();
+        $adults = collect($allotments)->sum(fn (array $a) => (int) $a['row']->male + (int) $a['row']->female);
+        $children = collect($allotments)->sum(fn (array $a) => (int) $a['row']->child);
 
         GuestMessage::send('guest.checkin', $reservation->mobile, [
             'guest' => $reservation->guest_name,
             'guest_email' => $reservation->email,
+            'guest_phone' => $reservation->mobile,
+            'guest_address' => trim(implode(', ', array_filter([
+                $reservation->address,
+                $reservation->city?->name,
+                $reservation->state?->name,
+                $reservation->zip_code,
+            ]))),
+            'reservation_no' => $reservation->reservation_no,
             'room' => $rooms > 1
                 ? $rooms . ' rooms'
                 : ($firstRoom?->room?->room_no ?: null),
-            'folio' => $folio,
+            'room_type' => (string) ($firstRoom?->room?->type?->name ?? 'Room'),
+            'meal_plan' => (string) ($firstRoom?->plan?->name ?? 'Room Only'),
+            'guests' => trim($adults . ' Adults' . ($children ? ', ' . $children . ' Child' . ($children > 1 ? 'ren' : '') : '')),
+            'folio_no' => $folio,
+            'arrival' => optional($firstRoom?->checkin_date)->format('d M Y'),
             'departure' => optional($firstRoom?->expected_checkout_date)->format('d M Y'),
         ], $reservation->branch_id);
 
@@ -274,9 +233,6 @@ class CheckInController extends Controller
             ));
     }
 
-    /**
-     * GET front-office/check-in-guest-details — everyone who has arrived.
-     */
     public function index(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
@@ -314,12 +270,6 @@ class CheckInController extends Controller
         ]);
     }
 
-    /**
-     * POST front-office/check-in-guest-details/{checkIn}/undo
-     *
-     * Checked the wrong guest in, or the wrong room. Removing the arrival
-     * hands the room straight back to the available pool.
-     */
     public function undo(CheckIn $checkIn): RedirectResponse
     {
         abort_unless($checkIn->branch_id === Helper::getActiveBranchId(), 404);
@@ -333,10 +283,6 @@ class CheckInController extends Controller
         $room = $checkIn->room?->room_no;
 
         DB::transaction(function () use ($checkIn) {
-            // The folio opened at arrival goes with the arrival, and the
-            // booking's services become chargeable again — otherwise they
-            // would count as already billed and never reach the bill of
-            // whoever arrives in this room instead.
             Folio::for($checkIn)->releaseReservationServices();
 
             FolioCharge::where('check_in_id', $checkIn->id)->delete();
@@ -345,13 +291,6 @@ class CheckInController extends Controller
 
             $checkIn->delete();
 
-            /*
-             * The booking row keeps the room number. It is the room this
-             * booking is allotted, whether the desk chose it when the booking
-             * was taken or when the guest walked in — throwing it away here
-             * would drop the booking back into the "no room yet" queue and let
-             * a walk-in be sold the room it is holding.
-             */
             $checkIn->reservation?->refreshCheckInStatus();
         });
 
@@ -362,12 +301,6 @@ class CheckInController extends Controller
 
         return back()->with('status', "Check-in undone — room {$room} is free again.");
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
 
     private function reservation(?int $id): Reservation
     {
@@ -395,8 +328,6 @@ class CheckInController extends Controller
 
         return $row;
     }
-
-    /** Booking rows that still have somebody to arrive. */
     private function pendingRows(Reservation $reservation)
     {
         return $reservation->rooms->filter(fn (ReservationRoom $row) => $row->pendingCount() > 0)->values();
@@ -418,6 +349,10 @@ class CheckInController extends Controller
             'address' => 'nullable|string|max:1000',
             'gender' => 'nullable|in:male,female,other',
 
+            'id_type' => ['nullable', Rule::in(array_keys(Compliance::ID_TYPES))],
+            'id_number' => 'nullable|string|max:60',
+            'id_photo' => ['nullable', 'mimes:jpg,jpeg,png,webp,heic,heif', 'max:8192'],
+
             'pick_drop_id' => 'nullable|integer',
             'visit_purpose_id' => 'nullable|integer',
             'arrival_from' => 'nullable|string|max:255',
@@ -437,6 +372,8 @@ class CheckInController extends Controller
             'rooms.*.*' => 'integer',
         ], [
             'rooms.required' => 'Allot at least one room before saving — use the Allot Room button.',
+            'id_photo.mimes' => 'That does not look like a photo — try again from the camera or choose an image file.',
+            'id_photo.max' => 'The ID photo must be 8 MB or smaller.',
         ]);
     }
 
@@ -466,13 +403,6 @@ class CheckInController extends Controller
     }
 
     /**
-     * Turn the posted room ids into booking-row + room objects, refusing
-     * anything the browser should not have offered.
-     *
-     * The popup's list can be minutes old, so every room is checked against
-     * the database again here. A stale tab must not be able to put two
-     * guests in one room.
-     *
      * @return array<int, array{row: ReservationRoom, rooms: \Illuminate\Support\Collection}>|string
      */
     private function allotments(Request $request, Reservation $reservation): array|string
@@ -509,8 +439,6 @@ class CheckInController extends Controller
                 );
             }
 
-            // Same exception as the popup makes: the row's own hold is not a
-            // clash with itself.
             $free = Room::query()
                 ->forBranch()
                 ->availableBetween($row->arrival_date->toDateString(), $row->checkout_date->toDateString(), $row->id)

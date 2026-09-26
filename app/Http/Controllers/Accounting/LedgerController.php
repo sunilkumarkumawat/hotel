@@ -12,22 +12,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The ledger master — every named account money can move to or from.
- *
- * Two fields here do real work and the rest are contact details:
- *
- *   `account_group_id` decides which column the balance lands in on the Trial
- *   Balance and whether the Profit & Loss reads it.
- *
- *   `cash_type` says whether this ledger *is* the cash box or *is* a bank
- *   account. Naming a ledger "Cash" is not enough — two branches have two cash
- *   boxes with the same name — and without it there is no Cash Book, no Bank
- *   Book, and no way to tell a Contra voucher from a Journal.
- */
 class LedgerController extends Controller
 {
-    /** GET accounting/ledger */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -65,7 +51,6 @@ class LedgerController extends Controller
         ]);
     }
 
-    /** POST accounting/ledger */
     public function save(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -101,13 +86,6 @@ class LedgerController extends Controller
             return back()->with('error', 'That ledger is not one of this branch\'s.');
         }
 
-        /*
-         * An opening balance on a ledger that has already been posted to would
-         * move every balance in its statement, including months that have been
-         * reported on. It is still allowed — a hotel setting the system up
-         * genuinely has to correct one — but the screen says what happened
-         * rather than letting it pass unremarked.
-         */
         $openingMoved = $ledger->exists
             && $ledger->hasEntries()
             && (
@@ -140,7 +118,6 @@ class LedgerController extends Controller
                 : null);
     }
 
-    /** POST accounting/ledger/{ledger}/toggle */
     public function toggle(int $ledger): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -159,13 +136,6 @@ class LedgerController extends Controller
         ));
     }
 
-    /**
-     * DELETE accounting/ledger/{ledger}
-     *
-     * Only ever possible for a ledger nothing was posted to. Once it carries
-     * entries it is part of the books, and deleting it would take a side of
-     * somebody's voucher with it.
-     */
     public function destroy(int $ledger): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();

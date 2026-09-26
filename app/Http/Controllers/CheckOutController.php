@@ -13,7 +13,9 @@ use App\Models\Master\PayMode;
 use App\Models\Master\Room;
 use App\Models\Master\Service;
 use App\Support\Folio;
+use App\Support\FolioRefused;
 use App\Support\GuestCrm;
+use App\Support\GuestDocument;
 use App\Support\GuestMessage;
 use App\Support\Money;
 use App\Support\Notify;
@@ -25,16 +27,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Check Out Guest — the bill, and the guest leaving.
- *
- * Everything here works off `Folio`, so the screen, the proforma invoice and
- * the bill that is finally saved can never disagree about what is owed.
- *
- * Checkout itself is the only thing that writes a Bill. Up to that moment the
- * folio is live and can be changed; after it, the bill is a copy that does not
- * move even if a rate is edited later.
- */
 class CheckOutController extends Controller
 {
     public function index(Request $request): View|RedirectResponse
@@ -52,22 +44,11 @@ class CheckOutController extends Controller
             ? $this->checkIn($request->integer('check_in'))
             : $inHouse->first();
 
-        /*
-         * An empty house is an ordinary morning, not an error — the sidebar
-         * links straight here, so a 404 page would be the desk's first sight
-         * of the screen. Send them where the guests are instead.
-         */
         if ($inHouse->isEmpty() && ! $checkIn) {
             return redirect()->route('front-office.check-in-details')
                 ->with('info', 'Nobody is checked in right now, so there is no bill to settle. Check a booking in first.');
         }
 
-        /*
-         * A stay that has already been settled must not come back to this
-         * screen. Opening it would re-post its room nights and let the desk
-         * take a second payment against a bill the guest has already paid, so
-         * it goes to the bill instead.
-         */
         if (! $checkIn->isInHouse()) {
             $bill = $checkIn->bill();
 
@@ -78,11 +59,14 @@ class CheckOutController extends Controller
                     ->with('error', $checkIn->guest_name . ' has already checked out.');
         }
 
-        // Post anything the booking owes that the folio has not got yet — a
-        // stay extended elsewhere, a rate corrected on the booking, and the
-        // services the guest took when they booked.
         $folio = Folio::for($checkIn);
-        $folio->post($request->user()->user_id);
+
+        try {
+            $folio->post($request->user()->user_id);
+        } catch (FolioRefused $e) {
+            return redirect()->route('front-office.check-in-details')
+                ->with('error', $e->getMessage());
+        }
 
         $discount = $folio->discountOf(
             $request->string('discount_mode')->toString() ?: 'amount',
@@ -107,21 +91,12 @@ class CheckOutController extends Controller
             'cardTypes' => Settlement::CARD_TYPES,
             'needsCard' => Settlement::CARD_TYPES_NEED_CARD,
             'services' => Service::query()->forBranch()->active()->with('tax')->orderBy('name')->get(),
-            // "No Tax" first, and that is where the Add Folio dialog opens.
             'taxChoices' => Tax::options(Helper::getActiveBranchId()),
             'defaultTaxChoice' => Tax::defaultChoice(),
             'billingInstructions' => BillingInstruction::query()->forBranch()->active()->orderBy('name')->pluck('name', 'id'),
             'chargeTypes' => ['service' => 'Services', 'misc' => 'Miscellaneous'],
         ]);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Folio
-    |--------------------------------------------------------------------------
-    */
-
-    /** Add Folio — a restaurant bill, laundry, anything the guest owes. */
     public function addCharge(Request $request, CheckIn $checkIn): RedirectResponse
     {
         $this->guard($checkIn);
@@ -133,8 +108,6 @@ class CheckOutController extends Controller
             'particulars' => 'required|string|max:255',
             'qty' => 'required|numeric|min:0.01|max:9999',
             'price' => 'required|numeric|min:0|max:9999999',
-            // Still accepted so an existing integration keeps working, but the
-            // dropdown is what the screen posts and the dropdown wins.
             'tax_percent' => 'nullable|numeric|min:0|max:100',
             'tax_choice' => Tax::rule($checkIn->branch_id),
             'tax_type' => 'required|in:exclusive,inclusive',
@@ -187,15 +160,10 @@ class CheckOutController extends Controller
     {
         abort_unless($charge->branch_id === Helper::getActiveBranchId(), 404);
 
-        // Room nights are posted by the system from the stay's own dates.
-        // Deleting one by hand would make the bill disagree with the calendar.
         if ($charge->isSystem()) {
             return back()->with('error', 'A room night cannot be removed by hand — change the checkout date instead.');
         }
 
-        // Once a charge is settled it is part of a bill the guest has already
-        // been charged and paid against — removing it now would leave that
-        // payment on record for a line that no longer exists on the folio.
         if ($charge->is_settled) {
             return back()->with('error', 'This charge has already been settled and cannot be removed.');
         }
@@ -205,13 +173,6 @@ class CheckOutController extends Controller
         return back()->with('status', 'Charge removed from the folio.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Extend, pax
-    |--------------------------------------------------------------------------
-    */
-
-    /** Guest Checkout Date Extend. */
     public function extend(Request $request, CheckIn $checkIn): RedirectResponse
     {
         $this->guard($checkIn);
@@ -229,8 +190,6 @@ class CheckOutController extends Controller
 
         $current = $checkIn->expected_checkout_date->toDateString();
 
-        // Shortening a stay would leave nights on the folio nobody stayed, and
-        // the guest may already have paid for them.
         if ($to < $current && $checkIn->charges()->ofType('room')->whereDate('charge_date', '>=', $to)->exists()) {
             return back()->with(
                 'error',
@@ -239,8 +198,6 @@ class CheckOutController extends Controller
         }
 
         if ($checkIn->room_id && $to > $current) {
-            // Somebody else may be booked into this room from tomorrow. The
-            // guest's own booking row is not somebody else.
             $clash = $this->clashOn(
                 $checkIn->room_id,
                 $current,
@@ -254,26 +211,22 @@ class CheckOutController extends Controller
             }
         }
 
-        DB::transaction(function () use ($checkIn, $to, $request) {
-            $checkIn->update(['expected_checkout_date' => $to]);
+        try {
+            DB::transaction(function () use ($checkIn, $to, $request) {
+                $checkIn->update(['expected_checkout_date' => $to]);
 
-            /*
-             * The booking row has to follow the stay. Every screen built on
-             * reservation_rooms — the tape chart, the status view the desk
-             * sells from — would otherwise still show the guest leaving on the
-             * old date and offer their room to the next caller. Only for a
-             * single-room row: a row covering three rooms is not this one
-             * guest's to move.
-             */
-            $row = $checkIn->reservationRoom;
+                $row = $checkIn->reservationRoom;
 
-            if ($row && (int) $row->no_of_rooms === 1 && $to > $row->checkout_date->toDateString()) {
-                $row->moveCheckoutTo($to);
-                $row->reservation?->refreshTotals();
-            }
+                if ($row && (int) $row->no_of_rooms === 1 && $to > $row->checkout_date->toDateString()) {
+                    $row->moveCheckoutTo($to);
+                    $row->reservation?->refreshTotals();
+                }
 
-            Folio::for($checkIn->fresh())->postRoomCharges($request->user()->user_id);
-        });
+                Folio::for($checkIn->fresh())->postRoomCharges($request->user()->user_id);
+            });
+        } catch (FolioRefused $e) {
+            return back()->with('error', $e->getMessage());
+        }
 
         return back()->with('status', sprintf(
             '%s now leaves on %s — %d night(s) on the folio.',
@@ -283,7 +236,6 @@ class CheckOutController extends Controller
         ));
     }
 
-    /** Pax Checkout — some of the people in the room leaving early. */
     public function paxCheckout(Request $request, CheckIn $checkIn): RedirectResponse
     {
         $this->guard($checkIn);
@@ -317,39 +269,49 @@ class CheckOutController extends Controller
         ));
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Settling
-    |--------------------------------------------------------------------------
-    */
-
-    /** Take a payment without closing the stay — the Multiple Pay Mode case. */
     public function pay(Request $request, CheckIn $checkIn): RedirectResponse
     {
-        $this->guard($checkIn);
+        $this->guard($checkIn, true);
 
         $data = $this->paymentRules($request);
+
+        $bill = $checkIn->status === 'checked_out'
+            ? Bill::where('check_in_id', $checkIn->id)->latest('id')->first()
+            : null;
 
         Settlement::create($this->paymentAttributes($data) + [
             'branch_id' => $checkIn->branch_id,
             'check_in_id' => $checkIn->id,
+            'bill_id' => $bill?->id,
             'created_by' => $request->user()->user_id,
         ]);
+
+        if ($bill) {
+            $bill->paid_amount = round((float) $bill->paid_amount + (float) $data['amount'], 2);
+            $bill->balance_amount = round((float) $bill->balance_amount - (float) $data['amount'], 2);
+            $bill->status = $bill->balance_amount > 0 ? 'partial' : 'settled';
+            $bill->save();
+        }
 
         $totals = Folio::for($checkIn->fresh())->totals();
 
         GuestMessage::send('guest.payment', $checkIn->mobile, [
             'guest' => $checkIn->guest_name,
             'guest_email' => $checkIn->reservation?->email,
+            'guest_phone' => $checkIn->mobile,
+            'room' => $checkIn->room?->room_no,
             'amount' => '₹ ' . number_format((float) $data['amount'], 2),
-            'folio' => $checkIn->folio_no,
-            'balance' => '₹ ' . number_format($totals['due'], 2),
+            'mode' => PayMode::find($data['pay_mode_id'] ?? null)?->name ?: 'Not specified',
+            'folio_no' => $checkIn->folio_no,
+            'balance' => $totals['due'] > 0 ? '₹ ' . number_format($totals['due'], 2) : null,
         ], $checkIn->branch_id);
 
         Notify::event('payment.received')
             ->title('₹ ' . number_format((float) $data['amount'], 2) . ' taken — ' . $checkIn->guest_name)
             ->body('Folio ' . $checkIn->folio_no . ' · due now ₹ ' . number_format($totals['due'], 2))
-            ->url(route('front-office.check-out-guest'))
+            ->url($bill
+                ? route('front-office.check-out-guest.invoice', $bill)
+                : route('front-office.check-out-guest'))
             ->send();
 
         return back()->with('status', sprintf(
@@ -373,9 +335,6 @@ class CheckOutController extends Controller
         return back()->with('status', "Payment of ₹{$amount} removed.");
     }
 
-    /**
-     * Checkout (F10) — the bill is written and the guest leaves.
-     */
     public function checkout(Request $request, CheckIn $checkIn): RedirectResponse
     {
         $this->guard($checkIn);
@@ -399,9 +358,6 @@ class CheckOutController extends Controller
             'pan_no.regex' => 'A PAN looks like ABCDE1234F.',
         ]);
 
-        // Normalised once, here. `date` accepts 09/12/2026 as readily as
-        // 2026-12-09, and the two sort differently as strings — a raw value
-        // compared against a stored date would shorten the wrong stay.
         $data['checkout_date'] = CarbonImmutable::parse($data['checkout_date'])->toDateString();
 
         if ($data['checkout_date'] < $checkIn->checkin_date->toDateString()) {
@@ -412,7 +368,6 @@ class CheckOutController extends Controller
         $discount = $folio->discountOf($data['discount_mode'] ?? 'amount', (float) ($data['discount_value'] ?? 0));
         $totals = $folio->totals($discount);
 
-        // A last payment can be taken on the way out.
         $paying = (float) ($data['amount'] ?? 0);
 
         if ($paying > 0 && ! ($data['pay_mode_id'] ?? null)) {
@@ -431,18 +386,8 @@ class CheckOutController extends Controller
                 ]);
             }
 
-            // A guest leaving before their booked checkout date gives back
-            // those nights now, before the bill is written — otherwise the
-            // room is freed to resell in this same transaction while the
-            // folio, and the bill about to be copied from it, still charge
-            // for nights nobody is going to spend in it. Harmless to call on
-            // an on-time or late checkout too: there is nothing past the
-            // checkout date to trim, so it matches no rows.
             Folio::for($checkIn)->trimRoomCharges($data['checkout_date']);
 
-            // Re-read after the payment and the trim, so the bill records
-            // what was actually taken and actually owed, not what was true a
-            // moment ago.
             $final = Folio::for($checkIn->fresh())->totals($discount);
 
             $bill = Bill::create([
@@ -475,19 +420,10 @@ class CheckOutController extends Controller
                 'actual_checkout_time' => now()->format('H:i'),
             ]);
 
-            // The room is empty and needs making up before it is sold again.
             if ($checkIn->room_id) {
                 Room::whereKey($checkIn->room_id)->update(['housekeeping_status' => 'dirty']);
             }
 
-            /*
-             * A guest leaving early gives their remaining nights back. The
-             * booking row goes on holding the room until its own checkout
-             * date, so without this the desk could not sell a room that is
-             * standing empty, and the tape chart would keep drawing a bar over
-             * it. The money is settled on the bill; this only shortens what
-             * the booking is still holding.
-             */
             $row = $checkIn->reservationRoom;
 
             if ($row && (int) $row->no_of_rooms === 1 && $data['checkout_date'] < $row->checkout_date->toDateString()) {
@@ -495,22 +431,11 @@ class CheckOutController extends Controller
                 $row->reservation?->refreshTotals();
             }
 
-            // With the last guest gone the booking is closed, which is what
-            // releases the nights it was still holding on that room.
             $checkIn->reservation?->refreshCheckOutStatus();
 
             return $bill;
         });
 
-        /*
-         * Two things happen on the way out, and neither may take the checkout
-         * down with it — the bill is already written and the guest is already
-         * in the car park.
-         *
-         * The points are awarded from room revenue only: a guest should not
-         * earn loyalty on the restaurant bill they signed for somebody else,
-         * and awardStay refuses to pay the same stay twice.
-         */
         if ($checkIn->guest_id) {
             rescue(fn () => GuestCrm::awardStay(
                 (int) $checkIn->guest_id,
@@ -522,12 +447,6 @@ class CheckOutController extends Controller
             rescue(fn () => GuestCrm::recount($checkIn->guest), null, false);
         }
 
-        /*
-         * The feedback link is made here rather than when the guest answers,
-         * so "we asked and they did not reply" is a fact the hotel holds. It
-         * rides out on the checkout message; if that message is switched off,
-         * the row still exists and the link can be sent by hand.
-         */
         $feedback = rescue(
             fn () => GuestCrm::feedbackFor((int) $checkIn->branch_id, (int) $checkIn->id, $checkIn->guest_id),
             null,
@@ -537,14 +456,25 @@ class CheckOutController extends Controller
         GuestMessage::send('guest.checkout', $checkIn->mobile, [
             'guest' => $checkIn->guest_name,
             'guest_email' => $checkIn->reservation?->email,
+            'guest_phone' => $checkIn->mobile,
+            'folio_no' => $checkIn->folio_no,
             'bill_no' => $bill->bill_no,
             'room' => $checkIn->room?->room_no,
+            'room_type' => (string) ($checkIn->room?->type?->name ?? 'Room'),
+            'meal_plan' => (string) ($checkIn->plan?->name ?? 'Room Only'),
+            'checkin_date' => $checkIn->checkin_date->format('d M Y'),
+            'departure' => optional($checkIn->actual_checkout_date)->format('d M Y'),
+            'nights' => $checkIn->nights,
+            'room_total' => (float) $bill->room_total > 0 ? '₹ ' . number_format((float) $bill->room_total, 2) : null,
+            'service_total' => (float) $bill->service_total > 0 ? '₹ ' . number_format((float) $bill->service_total, 2) : null,
+            'discount_total' => (float) $bill->discount_total > 0 ? '₹ ' . number_format((float) $bill->discount_total, 2) : null,
+            'tax_total' => (float) $bill->tax_total > 0 ? '₹ ' . number_format((float) $bill->tax_total, 2) : null,
             'amount' => '₹ ' . number_format((float) $bill->net_amount, 2),
             'paid' => '₹ ' . number_format((float) $bill->paid_amount, 2),
             'balance' => (float) $bill->balance_amount > 0
                 ? '₹ ' . number_format((float) $bill->balance_amount, 2)
                 : null,
-            'feedback_url' => $feedback ? route('guest-feedback', $feedback->token) : null,
+            'feedback_url' => $feedback ? GuestDocument::base() . '/feedback/' . $feedback->token : null,
         ], $checkIn->branch_id);
 
         Notify::event('checkout.done')
@@ -574,19 +504,19 @@ class CheckOutController extends Controller
             ));
     }
 
-    /** Proforma Invoice — the bill before the guest has left. */
-    public function proforma(Request $request, CheckIn $checkIn): View
+    public function proforma(Request $request, CheckIn $checkIn): View|RedirectResponse
     {
         $this->guard($checkIn, allowCheckedOut: true);
 
         $folio = Folio::for($checkIn);
 
-        // A proforma is often the first thing the desk opens, before the
-        // checkout screen has ever been looked at — so the nights have to be
-        // posted here too or the guest is handed a blank bill. Never for a
-        // stay that has left: its bill is closed.
         if ($checkIn->isInHouse()) {
-            $folio->post($request->user()->user_id);
+            try {
+                $folio->post($request->user()->user_id);
+            } catch (FolioRefused $e) {
+                return redirect()->route('front-office.check-out-guest', ['check_in' => $checkIn->id])
+                    ->with('error', $e->getMessage());
+            }
         }
 
         $discount = $folio->discountOf(
@@ -606,7 +536,6 @@ class CheckOutController extends Controller
         ]);
     }
 
-    /** The saved bill, reprinted exactly as it was written. */
     public function invoice(Bill $bill): View
     {
         abort_unless($bill->branch_id === Helper::getActiveBranchId(), 404);
@@ -637,11 +566,6 @@ class CheckOutController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
 
     private function checkIn(int $id): CheckIn
     {
@@ -696,7 +620,6 @@ class CheckOutController extends Controller
             'amount' => $data['amount'],
             'pay_mode_id' => $data['pay_mode_id'] ?? null,
             'pay_type' => $data['pay_type'] ?? null,
-            // Card details only make sense for a card payment.
             'card_type' => $isCard ? ($data['card_type'] ?? null) : null,
             'card_name' => $isCard ? ($data['card_name'] ?? null) : null,
             'card_last4' => $isCard ? ($data['card_last4'] ?? null) : null,
@@ -706,20 +629,11 @@ class CheckOutController extends Controller
         ];
     }
 
-    /**
-     * Why the room is not free over those nights, or null.
-     *
-     * `$exceptRow` is the guest's own booking row: a stay is always sitting on
-     * top of the booking that created it, so without the exception every
-     * extension would report the guest clashing with themselves.
-     */
     private function clashOn(int $roomId, string $from, string $to, int $exceptCheckIn, ?int $exceptRow = null): ?string
     {
         $booking = DB::table('reservation_rooms as rr')
             ->join('reservations as r', 'r.id', '=', 'rr.reservation_id')
             ->where('rr.room_id', $roomId)
-            // "Checked in" counts too: a booking with a second room still to
-            // come is a live hold on this room, however its status reads.
             ->whereIn('r.status', ['confirmed', 'tentative', 'checked_in'])
             ->when($exceptRow, fn ($q, $id) => $q->where('rr.id', '!=', $id))
             ->where('rr.arrival_date', '<', $to)

@@ -10,19 +10,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * Account groups — the shelves ledgers stand on.
- *
- * `nature` is the whole of what a group does: it decides which column a figure
- * lands in on the Trial Balance and whether the Profit & Loss reads it at all.
- * Move "Room Revenue" from income to expense and last year's profit changes
- * sign without a single voucher being touched, which is why a system group
- * refuses the change outright and an ordinary one says out loud what it is
- * about to do.
- */
 class GroupController extends Controller
 {
-    /** GET accounting/group */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -52,7 +41,6 @@ class GroupController extends Controller
         ]);
     }
 
-    /** POST accounting/group */
     public function save(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -89,9 +77,6 @@ class GroupController extends Controller
                 return back()->with('error', 'A group cannot sit inside itself.');
             }
 
-            // A group put inside its own descendant makes a loop, and a loop is
-            // what turns "every ledger under Sundry Creditors" into a query
-            // that never finishes.
             if (in_array((int) $parentId, AccountGroup::subtreeIds($branchId, (int) $group->id), true)) {
                 return back()->with('error', sprintf(
                     '%s already sits under %s, so it cannot also be its parent.',
@@ -112,7 +97,6 @@ class GroupController extends Controller
         return redirect()->route('accounting.group')->with('status', $group->name . ' saved.');
     }
 
-    /** POST accounting/group/{group}/toggle */
     public function toggle(int $group): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();

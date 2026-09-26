@@ -75,6 +75,31 @@
                 @endif
             </div>
 
+            @if ($canAdd)
+                {{--
+                    A scanner is a keyboard as far as the browser knows — it
+                    types the code and finishes with Enter, which submits this
+                    on its own. No script needed: a plain item lands on the
+                    order and the page comes back ready for the next scan,
+                    which is why this box gets the focus rather than search.
+
+                    A second .nv-till-find rather than a second field dropped
+                    into the first one — the icon and padding it borrows are
+                    both scoped to ".nv-till-find .nv-field-search", so this is
+                    the one wrapper that gets that styling for free, on its
+                    own row rather than squeezed beside search and Clear.
+                --}}
+                <div class="nv-till-find">
+                    <form method="POST" action="{{ route('point-of-sale.pos.order.barcode', $order->id) }}"
+                          class="nv-field-search">
+                        @csrf
+                        <x-icon name="search" />
+                        <input type="text" name="barcode" class="nv-input" placeholder="Scan a barcode…"
+                               aria-label="Scan a barcode" autocomplete="off" autofocus />
+                    </form>
+                </div>
+            @endif
+
             {{-- Categories, one at a time, with All as the way back out. --}}
             <div class="nv-cats" role="tablist" aria-label="Menu categories">
                 <a href="{{ route('point-of-sale.pos.order', [$order->id] + array_filter(['q' => $term ?: null])) }}"

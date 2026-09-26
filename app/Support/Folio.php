@@ -81,6 +81,28 @@ class Folio
             $to = $from->addDay();
         }
 
+        /*
+         * A hand-typed date that slipped a year turns "one night" into tens
+         * of thousands, and this loop would insert one FolioCharge per night
+         * — the checkout screen would then try to render all of them, which
+         * is what actually crashes the browser tab rather than show a bill.
+         * Caught here, before anything is written, rather than left to be
+         * discovered as a giant folio nobody can open.
+         */
+        $maxNights = max(1, (int) config('pms.max_stay_nights', 366));
+
+        if ($from->diffInDays($to) > $maxNights) {
+            throw new FolioRefused(sprintf(
+                '%s is booked from %s to %s — that is %s nights, which is almost certainly a '
+                    . 'mistyped date rather than a real stay. Fix the expected checkout date on the '
+                    . 'booking before opening this folio.',
+                $checkIn->guest_name,
+                $from->toDateString(),
+                $to->toDateString(),
+                number_format($from->diffInDays($to))
+            ));
+        }
+
         $existing = FolioCharge::query()
             ->where('check_in_id', $checkIn->id)
             ->ofType('room')

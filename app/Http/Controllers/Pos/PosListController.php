@@ -12,24 +12,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
-/**
- * The six screens across the top of the till, beside Dine In.
- *
- * They are all the same shape — pick an outlet, pick a day, read one table —
- * so they are one controller rather than six near-identical ones. What differs
- * between them is the question each answers, and that is worth writing down:
- *
- * - **Live Orders** — what the kitchen is working on right now.
- * - **Unsettled Invoices** — bills printed and not paid for. The one screen a
- *   manager should look at before going home.
- * - **Cash Balance** — what should be in the drawer.
- * - **Invoices** — every bill, settled or not, with its payments.
- * - **Outlet Orders** — the day by outlet and order type.
- * - **Collections** — the money, broken down by how it arrived.
- */
+
 class PosListController extends Controller
 {
-    /** GET point-of-sale/pos/live-orders */
     public function live(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -51,7 +36,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /** GET point-of-sale/pos/unsettled */
     public function unsettled(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -71,14 +55,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /**
-     * GET point-of-sale/pos/cash-balance
-     *
-     * What should be in the drawer at the end of a shift: the cash taken,
-     * mode by mode, for one day. Card and UPI are shown beside it because the
-     * question a cashier is really answering is "does the day add up", and
-     * cash alone never does.
-     */
     public function cash(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -96,8 +72,6 @@ class PosListController extends Controller
                 ->when($outlet, fn ($q) => $q->where('outlet_id', $outlet->id))
                 ->whereNotNull('folio_charge_id')
                 ->whereDate('invoice_at', $date)
-                // What was signed, not the face value: a guest can pay part in
-                // cash and sign the rest.
                 ->sum('folio_amount'), 2),
             'owed' => round(PosInvoice::query()
                 ->where('branch_id', $branchId)
@@ -108,7 +82,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /** GET point-of-sale/pos/invoices */
     public function invoices(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -137,12 +110,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /**
-     * GET point-of-sale/pos/outlet-orders
-     *
-     * The day by outlet and by how it was sold. Deliberately not filtered to
-     * one outlet — this is the screen you open to compare them.
-     */
     public function outletOrders(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -176,7 +143,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /** GET point-of-sale/pos/collections */
     public function collections(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -206,13 +172,6 @@ class PosListController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Shared plumbing
-    |--------------------------------------------------------------------------
-    */
-
-    /** Money taken, grouped by how it arrived. */
     private function payments(int $branchId, ?Outlet $outlet, string $from, string $to)
     {
         return DB::table('pos_payments as p')
@@ -234,14 +193,6 @@ class PosListController extends Controller
             ->get();
     }
 
-    /**
-     * Whether a pay mode is cash.
-     *
-     * By name, because the pay modes are a master list the hotel types itself
-     * and there is no column saying which one the drawer holds. Wrong only if
-     * somebody names a card machine "Cash Counter", which is a rename away from
-     * being right again.
-     */
     private function looksLikeCash(?string $mode): bool
     {
         return $mode !== null && str_contains(strtolower($mode), 'cash');
@@ -252,8 +203,6 @@ class PosListController extends Controller
     {
         $branchId = (int) Helper::getActiveBranchId();
 
-        // The same list the till itself offers, so a cashier restricted to one
-        // outlet cannot read another's takings by editing the URL.
         $outlets = PosController::outlets($branchId);
 
         $outlet = $outlets->firstWhere('id', $request->integer('outlet')) ?: $outlets->first();
@@ -295,7 +244,6 @@ class PosListController extends Controller
             false
         );
 
-        // A range typed backwards is a typo, not a reason to show nothing.
         return $from <= $to ? [$from, $to] : [$to, $from];
     }
 }

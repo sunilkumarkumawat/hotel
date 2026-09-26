@@ -3,31 +3,23 @@
 namespace App\Http\Controllers;
 
 use App\Helpers\Helper;
+use App\Models\FrontOffice\Settlement;
+use App\Models\Master\BookedBy;
 use App\Models\Master\Room;
 use App\Models\Master\PayMode;
 use App\Models\Master\RoomType;
 use App\Models\Pos\Outlet;
+use App\Models\User;
 use App\Support\Reports;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * The Reports section.
- *
- * An index of every report the system can produce, and one screen that renders
- * any of them. They all come back in the same shape from {@see Reports}, so
- * there is one view, one CSV export and one set of filters rather than eighteen
- * of each — which is what makes adding the nineteenth a ten-minute job.
- *
- * One permission for the whole section, on purpose. A hotel that trusts
- * somebody with the occupancy report trusts them with the arrivals list, and
- * eighteen permission rows is a matrix nobody would ever tick correctly.
- */
+
 class ReportsController extends Controller
 {
-    /** GET reports */
     public function index(): View
     {
         return view('reports.index', [
@@ -38,7 +30,6 @@ class ReportsController extends Controller
         ]);
     }
 
-    /** GET reports/{report} */
     public function show(Request $request, string $report): View
     {
         $meta = $this->meta($report);
@@ -52,16 +43,13 @@ class ReportsController extends Controller
             'meta' => $meta,
             'filters' => $filters,
             'options' => $this->options($meta, $branchId),
-        ]);
+        ] + (in_array($report, ['outstanding', 'check-in-out'], true) ? [
+            'payModes' => PayMode::query()->forBranch($branchId)->active()->orderBy('name')->pluck('name', 'id'),
+            'payTypes' => Settlement::PAY_TYPES,
+            'cardTypes' => Settlement::CARD_TYPES,
+        ] : []));
     }
 
-    /**
-     * GET reports/{report}/export
-     *
-     * The same rows as the screen, as a spreadsheet. Built by re-running the
-     * report rather than by re-querying: a export that could disagree with the
-     * screen it was downloaded from is worse than no export at all.
-     */
     public function export(Request $request, string $report): StreamedResponse
     {
         $meta = $this->meta($report);
@@ -82,8 +70,6 @@ class ReportsController extends Controller
                     function (string $key) use ($row) {
                         $value = $row->{$key} ?? '';
 
-                        // Numbers go out unformatted so a spreadsheet can add
-                        // them up — a column of "₹ 1,250.00" is text.
                         return is_float($value) ? number_format($value, 2, '.', '') : $value;
                     },
                     array_keys($result['columns'])
@@ -103,12 +89,6 @@ class ReportsController extends Controller
         }, $name, ['Content-Type' => 'text/csv']);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /** @return array<string, mixed> */
     private function meta(string $report): array
     {
@@ -120,12 +100,6 @@ class ReportsController extends Controller
     }
 
     /**
-     * Whatever this report's filters are, read safely.
-     *
-     * A date the browser sent as nonsense falls back rather than throwing, and
-     * a range typed backwards is treated as a typo rather than as a reason to
-     * show nothing.
-     *
      * @return array<string, mixed>
      */
     private function filters(Request $request, array $meta): array
@@ -139,6 +113,12 @@ class ReportsController extends Controller
             [$from, $to] = [$to, $from];
         }
 
+        $status = $request->string('status')->toString();
+        $status = in_array($status, ['checkin', 'checkout'], true) ? $status : 'both';
+
+        $paymentStatus = $request->string('payment_status')->toString();
+        $paymentStatus = in_array($paymentStatus, ['due', 'paid'], true) ? $paymentStatus : null;
+
         return [
             'from' => $from,
             'to' => $to,
@@ -146,16 +126,14 @@ class ReportsController extends Controller
             'pay_mode' => in_array('pay_mode', $wanted, true) ? $request->integer('pay_mode') : null,
             'outlet' => in_array('outlet', $wanted, true) ? $request->integer('outlet') : null,
             'room' => in_array('room', $wanted, true) ? $request->integer('room') : null,
-            'status' => in_array('status', $wanted, true) ? $request->string('status')->toString() : null,
+            'status' => in_array('status', $wanted, true) ? $status : null,
+            'payment_status' => in_array('payment_status', $wanted, true) ? $paymentStatus : null,
+            'booking_source' => in_array('booking_source', $wanted, true) ? $request->integer('booking_source') : null,
+            'staff' => in_array('staff', $wanted, true) ? $request->integer('staff') : null,
         ];
     }
 
     /**
-     * The lists the filter dropdowns are drawn from.
-     *
-     * Only the ones this report actually asks for — a screen with no outlet
-     * filter should not cost a query against the outlets table.
-     *
      * @return array<string, mixed>
      */
     private function options(array $meta, int $branchId): array
@@ -181,6 +159,22 @@ class ReportsController extends Controller
         if (in_array('room', $wanted, true)) {
             $options['room'] = Room::query()->forBranch($branchId)->active()
                 ->orderBy('room_no')->pluck('room_no', 'id');
+        }
+
+        if (in_array('booking_source', $wanted, true)) {
+            $options['booking_source'] = BookedBy::query()->forBranch($branchId)->active()
+                ->orderBy('name')->pluck('name', 'id');
+        }
+
+        if (in_array('staff', $wanted, true)) {
+            $options['staff'] = User::query()
+                ->whereIn('user_id', DB::table('check_ins')
+                    ->where('branch_id', $branchId)
+                    ->whereNotNull('created_by')
+                    ->distinct()
+                    ->pluck('created_by'))
+                ->orderBy('name')
+                ->pluck('name', 'user_id');
         }
 
         return $options;

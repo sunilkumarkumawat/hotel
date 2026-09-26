@@ -23,11 +23,13 @@
     /*
      * How many blank rows to put up. After a failed save it is exactly the
      * rows that came back, so every error lands on the line it belongs to;
-     * otherwise it is three, which is enough to feel like a list and few
-     * enough not to look like a form.
+     * otherwise it is one — Add another row is right there for anybody who
+     * wants more, and a screen that opens with three blanks already on it
+     * reads as "fill all of these in", which is not what a single new item
+     * needs.
      */
     $oldRows = (array) old('rows', []);
-    $rowKeys = $oldRows ? array_keys($oldRows) : range(0, 2);
+    $rowKeys = $oldRows ? array_keys($oldRows) : range(0, 0);
 @endphp
 
 @section('content')
@@ -69,14 +71,16 @@
         belong to one of them.
     --}}
     @if ($bulk)
-        <form id="rows-new" method="POST" action="{{ route($def['route'] . '.store-many') }}">
+        <form id="rows-new" method="POST" action="{{ route($def['route'] . '.store-many') }}"
+              @if ($photos) enctype="multipart/form-data" @endif>
             @csrf
             @foreach ($keep as $key => $value)
                 <input type="hidden" name="{{ $key }}" value="{{ $value }}" />
             @endforeach
         </form>
     @elseif ($mayAdd && ! $editing)
-        <form id="row-new" method="POST" action="{{ route($def['route'] . '.store') }}">
+        <form id="row-new" method="POST" action="{{ route($def['route'] . '.store') }}"
+              @if ($photos) enctype="multipart/form-data" @endif>
             @csrf
             {{-- Always present, so an unticked Active box reads as 0 rather
                  than as "the user said nothing". --}}
@@ -141,7 +145,7 @@
 
                              One row per thing being added, all posted together.
                              A row nobody touched is dropped on the server, so
-                             three blank rows and one filled in adds one thing —
+                             a blank row left sitting there costs nothing —
                              there is nothing to tidy up first.
                         --}}
                         @if ($bulk)
@@ -174,6 +178,20 @@
                             </tr>
                         @elseif ($mayAdd && ! $editing)
                             <tr class="is-new">
+                                @if ($photos)
+                                    <td>
+                                        <span class="nv-item-photo-form">
+                                            <label for="row-new_photo" class="nv-item-photo" title="Add a photo" data-item-photo-label>
+                                                <x-icon name="upload" />
+                                            </label>
+                                            <input type="file" name="photo" id="row-new_photo"
+                                                   accept="image/png,image/jpeg,image/webp" form="row-new" data-item-photo-input />
+                                        </span>
+                                        @error('photo')
+                                            <span class="nv-error">{{ $message }}</span>
+                                        @enderror
+                                    </td>
+                                @endif
                                 @foreach ($fields as $name => $field)
                                     <td>
                                         @include('pos.setup.partials.cell', [

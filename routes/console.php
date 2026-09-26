@@ -195,3 +195,115 @@ Artisan::command(
         return 0;
     }
 )->purpose('Close the hotel\'s day: post room rent, mark no-shows, freeze the figures');
+
+/*
+|--------------------------------------------------------------------------
+| php artisan pms:tunnel-watch
+|--------------------------------------------------------------------------
+| Keeps a free Cloudflare Quick Tunnel open so Chatway (WhatsApp) can fetch
+| the guest PDF link over the internet. Without a live tunnel, a WhatsApp
+| message that is supposed to carry a PDF quietly falls back to text only
+| instead — see the fallback branch in WhatsApp::chatwaySendFile().
+|
+| A Quick Tunnel has no fixed address: every time it (re)connects, Cloudflare
+| hands it a brand new random *.trycloudflare.com name, and — being the
+| free, account-less kind — it can also drop without warning, with nothing
+| left running to notice. Both used to be invisible until WhatsApp
+| mysteriously stopped attaching PDFs again, and fixing it meant restarting
+| the tunnel by hand and copying its new address into .env before anything
+| worked again.
+|
+| Started by tunnel.bat, in its own window, the same way serve.bat and
+| queue-worker.bat are. This loops forever: if the tunnel drops, the child
+| process exiting is noticed immediately and it reconnects on its own;
+| whenever the address changes, .env's PMS_PUBLIC_URL is rewritten right
+| then. The queue worker only reads .env when it (re)starts, so also hit
+| diag/queue-restart (routes/web.php) once after a fresh address shows up
+| here, instead of waiting for the worker's own ~30-minute restart. Nothing
+| here needs to be typed or copied by hand again.
+*/
+Artisan::command('pms:tunnel-watch', function () {
+    $logPath = storage_path('logs/tunnel.log');
+    $envPath = base_path('.env');
+
+    $binary = collect([
+        config('pms.cloudflared_path'),
+        'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe',
+        'C:\\Program Files\\cloudflared\\cloudflared.exe',
+    ])->filter()->first(fn ($path) => is_file($path)) ?? 'cloudflared';
+
+    $log = function (string $line) use ($logPath) {
+        @file_put_contents($logPath, '[' . now()->toDateTimeString() . '] ' . $line . PHP_EOL, FILE_APPEND);
+    };
+
+    // Only touches .env when the address actually changed, so a tunnel that
+    // reconnects with the SAME address (it can happen) does not rewrite the
+    // file or spam the log for no reason.
+    $applyUrl = function (string $url) use ($envPath, $log) {
+        $contents = @file_get_contents($envPath);
+
+        if ($contents === false) {
+            $this->error('  Could not read .env to update PMS_PUBLIC_URL.');
+            $log('ERROR: could not read .env to update PMS_PUBLIC_URL.');
+
+            return;
+        }
+
+        $updated = preg_match('/^PMS_PUBLIC_URL=.*$/m', $contents)
+            ? preg_replace('/^PMS_PUBLIC_URL=.*$/m', 'PMS_PUBLIC_URL=' . $url, $contents, 1)
+            : rtrim($contents, "\n") . "\nPMS_PUBLIC_URL=" . $url . "\n";
+
+        if ($updated === $contents) {
+            return;
+        }
+
+        file_put_contents($envPath, $updated);
+        $this->info('  New tunnel address — .env PMS_PUBLIC_URL updated to: ' . $url);
+        $log('New tunnel address - .env PMS_PUBLIC_URL updated to: ' . $url);
+    };
+
+    $this->line('Using cloudflared: ' . $binary);
+    $log('Using cloudflared: ' . $binary);
+
+    while (true) {
+        $this->line('[' . now()->toDateTimeString() . '] Starting tunnel...');
+        $log('Starting tunnel...');
+
+        $command = (str_contains($binary, '\\') ? '"' . $binary . '"' : $binary)
+            . ' tunnel --url http://127.0.0.1:8000 2>&1';
+
+        $process = proc_open($command, [1 => ['pipe', 'w']], $pipes);
+
+        if (! is_resource($process)) {
+            $this->error('Could not start cloudflared - is it installed?');
+            $log('ERROR: could not start cloudflared process.');
+            sleep(10);
+            continue;
+        }
+
+        $seenUrl = null;
+
+        while (($line = fgets($pipes[1])) !== false) {
+            $line = rtrim($line, "\r\n");
+
+            if ($line === '') {
+                continue;
+            }
+
+            $this->line('  ' . $line);
+            $log($line);
+
+            if (preg_match('/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i', $line, $m) && $m[0] !== $seenUrl) {
+                $seenUrl = $m[0];
+                $applyUrl($seenUrl);
+            }
+        }
+
+        fclose($pipes[1]);
+        proc_close($process);
+
+        $this->line('[' . now()->toDateTimeString() . '] Tunnel stopped - restarting in 3 seconds...');
+        $log('Tunnel stopped - restarting in 3 seconds...');
+        sleep(3);
+    }
+})->purpose('Keep a Cloudflare Quick Tunnel open for WhatsApp PDF delivery, and keep .env in sync with its address');

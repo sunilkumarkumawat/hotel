@@ -32,13 +32,6 @@ class LoginController extends Controller
         if (! Auth::attempt($request->only('username', 'password'), $request->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey($request));
 
-            /*
-             * The username that was tried is recorded; the password is not,
-             * and never will be — a typed password in a log is a password in
-             * a log, whether or not it was the right one. Five of these
-             * against one name at three in the morning is the most useful
-             * thing the audit trail holds.
-             */
             Audit::note('login_failed', 'Sign-in refused for "' . $request->string('username') . '"', [
                 'area' => 'access',
                 'user_name' => 'Not signed in',
@@ -87,7 +80,6 @@ class LoginController extends Controller
 
     public function logout(Request $request): RedirectResponse
     {
-        // Written before the session goes, or there is nobody left to name.
         Audit::note('logout', ($request->user()?->name ?: 'Somebody') . ' signed out', [
             'area' => 'access',
             'branch_id' => $request->user()?->branch_id,

@@ -38,7 +38,7 @@ class WhatsApp
      * the machine is running this code or the copy from two days ago — which
      * is otherwise impossible to tell apart from a real fault.
      */
-    public const BUILD = '2026-09-17 · curl + dotted-config + ca-bundle';
+    public const BUILD = '2026-09-24 · send-file for attachments';
 
     /**
      * The root certificates to fall back on, relative to the project folder.
@@ -54,12 +54,13 @@ class WhatsApp
      * `$fileUrl` is a publicly reachable link — a PDF bill, a registration
      * card. Only the gateways that can carry one use it; the rest ignore it
      * rather than failing, because a message that arrived without its
-     * attachment beats no message at all.
+     * attachment beats no message at all. `$fileName` is what the guest sees
+     * as the saved file's name; a driver that does not need one ignores it.
      *
      * @throws RuntimeException when the provider refuses, cannot be reached,
      *                          or has not been configured
      */
-    public static function send(string $to, string $message, ?string $fileUrl = null): string
+    public static function send(string $to, string $message, ?string $fileUrl = null, ?string $fileName = null): string
     {
         $to = self::number($to);
 
@@ -93,7 +94,7 @@ class WhatsApp
         }
 
         return match ($driver) {
-            'chatway' => self::chatway($to, $message, $fileUrl, $config),
+            'chatway' => self::chatway($to, $message, $fileUrl, $config, $fileName),
             'meta' => self::meta($to, $message, $config),
             'twilio' => self::twilio($to, $message, $config),
             'gateway' => self::gateway($to, $message, $config),
@@ -410,6 +411,26 @@ class WhatsApp
     /**
      * int.chatway.in — the gateway this hotel already uses.
      *
+     * Two different endpoints, not one endpoint with an optional extra
+     * parameter: send-msg for text, and a genuinely separate send-file for
+     * text with a file on it. That took real trial and error to pin down —
+     * six plausible query-string names were tried on send-msg first
+     * (fileurl, file_url, media_url, mediaurl, attachment, file) and every
+     * one of them sent the text and silently dropped the file, because
+     * send-msg was never going to carry an attachment under any name.
+     */
+    private static function chatway(string $to, string $message, ?string $fileUrl, array $config, ?string $fileName = null): string
+    {
+        if (filled($fileUrl)) {
+            return self::chatwaySendFile($to, $message, $fileUrl, $fileName ?: 'Document.pdf', $config);
+        }
+
+        return self::chatwayText($to, $message, $config);
+    }
+
+    /**
+     * Text only, no attachment — int.chatway.in/api/send-msg.
+     *
      * Its API is a GET with everything in the query string, which is why the
      * parameters are built with http_build_query rather than pasted together:
      * a guest name with an & in it, or a message with a # in it, would
@@ -420,7 +441,7 @@ class WhatsApp
      * thing for an Indian mobile and wrong for anybody else's — this way a
      * foreign guest's number reaches them too.
      */
-    private static function chatway(string $to, string $message, ?string $fileUrl, array $config): string
+    private static function chatwayText(string $to, string $message, array $config): string
     {
         $query = [
             'username' => $config['username'],
@@ -428,10 +449,6 @@ class WhatsApp
             'message' => $message,
             'token' => $config['token'],
         ];
-
-        if (filled($fileUrl)) {
-            $query['fileurl'] = $fileUrl;
-        }
 
         $reply = self::call(
             'GET',
@@ -464,6 +481,86 @@ class WhatsApp
         $body = trim($reply['body']);
 
         return $body !== '' ? Str::limit($body, 200) : 'sent';
+    }
+
+    /**
+     * Text with a file on it — int.chatway.in/api/send-file, a genuinely
+     * separate endpoint from send-msg with its own query keys, file_url and
+     * file_name.
+     *
+     * Its timeout is deliberately shorter than send-msg's own, and a plain
+     * timeout here is treated as a soft success rather than a hard failure.
+     * The reason is this file's own address: on a hotel's own laptop, the
+     * link Chatway is asked to fetch usually points right back at this same
+     * machine, through a tunnel — and `php artisan serve` answers one
+     * request at a time. While this call is outstanding, that one worker is
+     * busy waiting on it, so Chatway's own fetch of the file can only go
+     * through once this call has given up and freed that worker — proven by
+     * testing: two calls that timed out here (at 12s and again at 45s) both
+     * went on to actually deliver the file a little afterwards, once PHP had
+     * moved on and the one worker was free to answer Chatway back. A guest's
+     * booking or checkout should not sit and wait for an answer that a
+     * laptop running one request at a time cannot always give in time — so
+     * this gives up quickly and logs a bare timeout as sent-but-unconfirmed
+     * rather than as a failure. (Moving this server from `php artisan serve`
+     * to Apache — already installed with XAMPP — removes the wait
+     * altogether; one-request-at-a-time is `php artisan serve`'s limit, not
+     * this application's or Chatway's.)
+     *
+     * A fast, genuine refusal — a bad token, a malformed request — is a
+     * different matter, and the guest should not get nothing over it, so
+     * that case still falls back to the plain text message.
+     */
+    private static function chatwaySendFile(string $to, string $message, string $fileUrl, string $fileName, array $config): string
+    {
+        $trace = ' [sent number=' . $to . ' as ' . $config['username'] . ']';
+        $timeout = (int) ($config['file_timeout'] ?: 10);
+
+        $query = [
+            'username' => $config['username'],
+            'number' => $to,
+            'message' => $message,
+            'token' => $config['token'],
+            'file_url' => $fileUrl,
+            'file_name' => $fileName,
+        ];
+
+        try {
+            $reply = self::call('GET', 'https://int.chatway.in/api/send-file', [
+                'query' => $query,
+                'timeout' => $timeout,
+            ]);
+        } catch (RuntimeException $e) {
+            if (str_contains(strtolower($e->getMessage()), 'timed out')) {
+                return 'sent — Chatway had not answered within ' . $timeout . 's. On this '
+                    . 'server that usually means it is still fetching the attachment from this '
+                    . 'machine and will finish the send shortly after; it is logged here as sent '
+                    . 'rather than failed because sending twice (this message, then a second '
+                    . 'plain-text one) is worse than one message that took a few extra seconds.'
+                    . $trace;
+            }
+
+            // A fast, real failure — cannot reach the host, TLS broke, and so
+            // on — is not the self-timeout above, so the guest still gets
+            // the text.
+            return 'could not send the attachment (' . $e->getMessage() . '); sent as text '
+                . 'instead: ' . self::chatwayText($to, $message, $config) . $trace;
+        }
+
+        if ($reply['status'] >= 400) {
+            return 'Chatway refused the attachment (HTTP ' . $reply['status'] . '): '
+                . Str::limit(trim($reply['body']), 120) . '; sent as text instead: '
+                . self::chatwayText($to, $message, $config) . $trace;
+        }
+
+        if ($refusal = self::refusal($reply['body'])) {
+            return 'Chatway refused the attachment (' . $refusal . '); sent as text instead: '
+                . self::chatwayText($to, $message, $config) . $trace;
+        }
+
+        $body = trim($reply['body']);
+
+        return ($body !== '' ? Str::limit($body, 200) : 'sent') . $trace;
     }
 
     private static function meta(string $to, string $message, array $config): string
@@ -748,6 +845,21 @@ class WhatsApp
         }
 
         $json = json_decode($body, true);
+
+        /*
+         * Chatway wraps every reply — a success and a refusal alike — in a
+         * JSON array holding one object, e.g. [{"status":"error", ...}],
+         * never a bare object. Every check below reads a top-level key
+         * ('status', 'message', ...), so left as-is they look at the array
+         * itself, never find those keys on it, and let a genuine refusal
+         * straight through as if the body meant nothing — which is how a
+         * send Chatway itself reported as "error" was ending up logged as
+         * "Sent". Unwrapping the single element here is what lets the
+         * existing key checks actually see what Chatway said.
+         */
+        if (is_array($json) && count($json) === 1 && array_key_exists(0, $json) && is_array($json[0])) {
+            $json = $json[0];
+        }
 
         if (is_array($json)) {
             foreach (['error', 'err'] as $key) {

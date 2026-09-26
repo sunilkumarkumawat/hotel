@@ -13,20 +13,8 @@ use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * Who changed what, and when.
- *
- * The screen is built round narrowing rather than scrolling. Nobody reads an
- * audit trail from the top — they arrive at it with a question ("who
- * cancelled that bill on Tuesday?"), so the filters are the screen and the
- * list is what falls out of them.
- *
- * There is no edit and no delete here, for anybody, including an
- * administrator. A log a manager can tidy up is not evidence of anything.
- */
 class TrailController extends Controller
 {
-    /** GET audit/trail */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -50,7 +38,6 @@ class TrailController extends Controller
         ]);
     }
 
-    /** GET audit/trail/export */
     public function export(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -58,8 +45,6 @@ class TrailController extends Controller
         [$from, $to] = $this->range($request);
         $filters = $this->filters($request);
 
-        // Capped: an export is a thing somebody opens in a spreadsheet, and a
-        // file with a million rows in it is one nobody can open at all.
         $rows = $this->query($branchId, $from, $to, $filters)->limit(20000)->get();
 
         Audit::note('exported', 'Audit trail exported — ' . $from . ' to ' . $to, [
@@ -93,13 +78,6 @@ class TrailController extends Controller
         }, 'audit-trail-' . $from . '.csv', ['Content-Type' => 'text/csv']);
     }
 
-    /**
-     * GET audit/logins
-     *
-     * Sign-ins, sign-outs and refusals, with the refusals first in the mind of
-     * whoever built it: five failures against one username at three in the
-     * morning is the single most useful thing this table holds.
-     */
     public function logins(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -135,7 +113,6 @@ class TrailController extends Controller
                 'action' => $request->string('action')->toString(),
             ],
             'failed' => $failed,
-            // Who is being tried at, and from where — the shape of a problem.
             'suspects' => $failed
                 ->groupBy(fn ($row) => ($row->subject_label ?: 'unknown') . ' · ' . ($row->ip ?: 'no address'))
                 ->map->count()
@@ -143,12 +120,6 @@ class TrailController extends Controller
                 ->take(6),
         ]);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | The bits both screens share
-    |--------------------------------------------------------------------------
-    */
 
     private function query(int $branchId, string $from, string $to, array $filters): Builder
     {
@@ -182,7 +153,6 @@ class TrailController extends Controller
         ];
     }
 
-    /** How much of each kind there is in the window — the chips above the list. */
     private function counts(int $branchId, string $from, string $to): array
     {
         return ActivityLog::query()
@@ -203,11 +173,6 @@ class TrailController extends Controller
     }
 
     /**
-     * The window — the last seven days by default.
-     *
-     * Wide enough that "yesterday evening" is already on the screen when it
-     * opens, narrow enough that the first page is not a year of rows.
-     *
      * @return array{0: string, 1: string}
      */
     private function range(Request $request): array

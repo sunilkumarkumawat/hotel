@@ -280,12 +280,24 @@ class Helper
      * @param  string|null  $toMobile  however the desk typed it — 98765 43210,
      *                                 +91 98765 43210 and 09876543210 all work
      * @param  string|null  $filepath  a public URL to send as an attachment
-     * @param  string|null  $filename  kept for callers that pass it; the
-     *                                 gateway takes the name from the URL
+     * @param  string|null  $filename  what the guest sees as the saved file's
+     *                                 name; Chatway's send-file takes this as
+     *                                 its own field, it is not read from the
+     *                                 URL — see WhatsApp::chatwaySendFile()
      * @return array{status: string, response?: string, message?: string}
      */
     public static function sendWhatsappMessage($toMobile, $text, $filepath = null, $filename = null): array
     {
+        // Same pause as GuestMessage::send() and Notify — see config/pms.php.
+        // No caller currently reaches this (checked every controller), but a
+        // future one should be paused too without anybody having to remember
+        // there is a third place this can go out from. This is a general
+        // WhatsApp helper with no fixed audience, so it follows guest
+        // WhatsApp's switch — the more common of the two in practice.
+        if (config('pms.guest_whatsapp_paused')) {
+            return ['status' => 'error', 'message' => 'WhatsApp is paused right now — see config/pms.php (guest_whatsapp_paused).'];
+        }
+
         if (blank($toMobile)) {
             return ['status' => 'error', 'message' => 'Mobile number is required.'];
         }
@@ -299,7 +311,7 @@ class Helper
         $delivery = \App\Support\GuestMessage::logRow($number, (string) ($filename ?: ''));
 
         try {
-            $response = \App\Support\WhatsApp::send((string) $toMobile, (string) $text, $filepath);
+            $response = \App\Support\WhatsApp::send((string) $toMobile, (string) $text, $filepath, $filename);
 
             \App\Support\GuestMessage::markSent($delivery, $response);
 

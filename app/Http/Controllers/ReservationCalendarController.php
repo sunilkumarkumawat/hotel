@@ -15,12 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
-/**
- * Reservation Calendar New — the tape chart.
- *
- * One row per room, one column per night. Drag across free nights to start a
- * booking or block the room; drop an unassigned booking onto a free room.
- */
+
 class ReservationCalendarController extends Controller
 {
     private const SPANS = [7 => '7 days', 15 => '15 days', 30 => '30 days'];
@@ -44,9 +39,6 @@ class ReservationCalendarController extends Controller
         ]);
     }
 
-    /**
-     * Take a room out of service for a run of nights.
-     */
     public function block(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -81,7 +73,6 @@ class ReservationCalendarController extends Controller
         return back()->with('status', "Room {$room->room_no} blocked from {$data['from_date']}.");
     }
 
-    /** Put a blocked room back into the pool. */
     public function unblock(Request $request): RedirectResponse
     {
         $data = $request->validate(['block_id' => 'required|integer']);
@@ -96,9 +87,6 @@ class ReservationCalendarController extends Controller
             : back()->with('error', 'That block no longer exists.');
     }
 
-    /**
-     * Put an unassigned booking into a specific room.
-     */
     public function assign(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -116,9 +104,6 @@ class ReservationCalendarController extends Controller
 
         abort_unless($line, 404);
 
-        // The same guard move() has: a cancelled or already-departed booking
-        // is not a live hold on a room, and allotting one from the chart would
-        // let it sit there as if it were still waiting to arrive.
         if (! in_array($line->status, ['confirmed', 'tentative'], true)) {
             return back()->with('error', sprintf(
                 '%s is %s — only a booking that has not arrived can be allotted from the chart.',
@@ -136,9 +121,6 @@ class ReservationCalendarController extends Controller
             return back()->with('error', "Room {$room->room_no} is not free then — {$clash}.");
         }
 
-        // The same guard the drag has: a guest who has arrived is already in a
-        // room, and re-allotting the booking under them would leave the
-        // calendars naming one room while the folio bills another.
         if ($this->hasArrived((int) $line->id)) {
             return back()->with(
                 'error',
@@ -146,18 +128,6 @@ class ReservationCalendarController extends Controller
             );
         }
 
-        /*
-         * A family's booking is ONE row saying five rooms, so allotting has to
-         * be able to take them one at a time: this peels a single room off the
-         * row rather than refusing the whole thing.
-         *
-         * The row is split — its count drops by one and a new one-room row is
-         * created carrying the allotted room — so five drags produce five rows
-         * of one, the reservation still totals five rooms, and the queue counts
-         * down as the clerk works. The money moves with it, priced off the same
-         * per-room figures the booking was taken at, so the reservation's total
-         * is the same before and after.
-         */
         if ((int) $line->no_of_rooms > 1) {
             $allotted = $this->peelOneRoom((int) $line->id, $room);
 
@@ -178,15 +148,6 @@ class ReservationCalendarController extends Controller
     }
 
     /**
-     * Take one room off a multi-room booking row and allot it.
-     *
-     * The row keeps everything that priced it — dates, plan, rent, discount,
-     * pax — and only the count moves: the original drops by one, and a new row
-     * of exactly one room is created in the allotted room. Both rows are then
-     * re-priced from the stored per-room figures with App\Support\Money, which
-     * is the same arithmetic the booking screen used, so five separate rows of
-     * one add up to what one row of five did.
-     *
      * @return int how many rooms are still waiting on the original row
      */
     private function peelOneRoom(int $lineId, Room $room): int
@@ -197,8 +158,6 @@ class ReservationCalendarController extends Controller
 
             $branchId = $line->reservation?->branch_id;
 
-            // What one room of this row costs, using the figures it was taken
-            // at rather than today's rate card.
             $perRoom = fn (int $count) => Money::roomRow([
                 'room_rent' => (float) $line->room_rent,
                 'discount' => (float) $line->discount,
@@ -206,7 +165,6 @@ class ReservationCalendarController extends Controller
                 'no_of_days' => (int) $line->no_of_days,
                 'no_of_rooms' => $count,
                 'tax_type' => $line->tax_type,
-                // Both halves of the split keep the row's own tax choice.
                 'tax_choice' => $line->tax_choice,
                 'tax_percent' => (float) $line->tax_percent,
             ], $branchId);
@@ -215,9 +173,6 @@ class ReservationCalendarController extends Controller
             $one = $perRoom(1);
             $rest = $perRoom($left);
 
-            // The pax on the row belong to the whole party; the room being
-            // peeled off takes a fair share and the rest stays behind, so a
-            // family of ten in five rooms does not become fifty people.
             $share = fn (int $total) => (int) floor($total / max(1, (int) $line->no_of_rooms));
 
             ReservationRoom::create([
@@ -250,8 +205,6 @@ class ReservationCalendarController extends Controller
 
             $line->update([
                 'no_of_rooms' => $left,
-                // Whatever the split left over stays on the waiting row, so no
-                // guest is lost between the two.
                 'male' => max(0, (int) $line->male - $share((int) $line->male)),
                 'female' => max(0, (int) $line->female - $share((int) $line->female)),
                 'child' => max(0, (int) $line->child - $share((int) $line->child)),
@@ -265,13 +218,6 @@ class ReservationCalendarController extends Controller
         });
     }
 
-    /**
-     * Drag a booking to different nights, or to a different room.
-     *
-     * "Meri booking agli date pe kar do" is the whole point: the stay keeps
-     * its length, so the number of nights, the rent and the tax are untouched
-     * and only the dates move. That is why this does not re-price anything.
-     */
     public function move(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -307,13 +253,6 @@ class ReservationCalendarController extends Controller
             return back()->with('error', "{$line->reservation_no} is for {$line->no_of_rooms} rooms — open the booking to change its dates.");
         }
 
-        /*
-         * The booking's own status is not enough. A booking with two rows —
-         * one arrived, one still to come — stays "confirmed", and dragging the
-         * arrived row would leave the calendars showing one room while the
-         * folio billed another. A guest already in a room is moved from Check
-         * Out Guest, not by dragging their booking.
-         */
         if ($this->hasArrived((int) $line->id)) {
             return back()->with('error', sprintf(
                 '%s has already checked in%s — extend or move them from Check Out Guest, not from the chart.',
@@ -324,7 +263,6 @@ class ReservationCalendarController extends Controller
 
         $room = Room::query()->forBranch()->findOrFail($data['room_id']);
 
-        // Keep the stay exactly as long as it was; only the dates slide.
         $nights = max(1, Money::nights(substr($line->arrival_date, 0, 10), substr($line->checkout_date, 0, 10)));
         $from = CarbonImmutable::parse($data['arrival_date'])->toDateString();
         $to = CarbonImmutable::parse($from)->addDays($nights)->toDateString();
@@ -359,7 +297,6 @@ class ReservationCalendarController extends Controller
         ));
     }
 
-    /** Free rooms for a set of dates — feeds the assign dropdown. */
     public function freeRooms(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -384,13 +321,6 @@ class ReservationCalendarController extends Controller
         return response()->json($rooms);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /** Is somebody from this booking row already in a room? */
     private function hasArrived(int $rowId): bool
     {
         return DB::table('check_ins')
@@ -399,19 +329,6 @@ class ReservationCalendarController extends Controller
             ->exists();
     }
 
-    /**
-     * Is anything already sitting in this room over these nights?
-     *
-     * Returns a human reason, or null when the room is free. Checked here as
-     * well as in the UI because the chart the browser is looking at may be
-     * seconds out of date.
-     */
-    /**
-     * Why the room is not free over [$from, $to), or null if it is.
-     *
-     * `$exceptLine` leaves one booking line out of the test — without it,
-     * nudging a stay one night to the right would clash with itself.
-     */
     private function clashOn(int $roomId, string $from, string $to, ?int $exceptLine = null): ?string
     {
         $booking = DB::table('reservation_rooms as rr')
@@ -427,8 +344,6 @@ class ReservationCalendarController extends Controller
             return "{$booking} is in it";
         }
 
-        // A guest already checked in holds the room even when the booking
-        // line does not name it — see Room::scopeAvailableBetween.
         $guest = DB::table('check_ins')
             ->where('room_id', $roomId)
             ->where('status', 'in_house')

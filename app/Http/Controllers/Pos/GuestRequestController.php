@@ -15,19 +15,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * What a guest asked for from their own phone, waiting for somebody at the
- * desk to say yes or no.
- *
- * approve() is the only place in the app that turns a guest's own request
- * into real order lines and a KOT — and it does that through PosTill, the
- * same class every other screen that changes a bill goes through, so a
- * guest-placed samosa is billed, taxed and printed exactly like a
- * waiter-placed one. reject() touches nothing but this request.
- */
+
 class GuestRequestController extends Controller
 {
-    /** GET point-of-sale/pos/guest-requests */
     public function index(Request $request): View
     {
         [$branchId, $outlet, $outlets] = $this->context($request);
@@ -49,13 +39,6 @@ class GuestRequestController extends Controller
         ]);
     }
 
-    /**
-     * POST point-of-sale/pos/guest-requests/{guestRequest}/approve
-     *
-     * "Approve" means: put these items on this table's order and send them to
-     * the kitchen in the same breath — a captain reading the request and
-     * telling the kitchen, just typed on a phone instead of a pad.
-     */
     public function approve(Request $request, int $guestRequest): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -68,9 +51,6 @@ class GuestRequestController extends Controller
         $seat = PosTable::query()->forBranch($branchId)->findOrFail($guestRequest->pos_table_id);
         $userId = $request->user()?->user_id;
         $till = PosTill::atTable($seat, $branchId, $userId);
-
-        // Re-read from the live menu, same as the guest's own store() did —
-        // never trust a snapshot taken whenever the guest happened to order.
         $menu = PosMenuItem::query()
             ->forBranch($branchId)
             ->sellable()
@@ -89,10 +69,6 @@ class GuestRequestController extends Controller
 
                 continue;
             }
-
-            // No per-item remark — a guest's note (if they left one) is
-            // table-level, shown alongside the request on this screen rather
-            // than attached to one line.
             $till->addItem($item, (float) $line['qty'], null);
         }
 
@@ -120,10 +96,6 @@ class GuestRequestController extends Controller
                 ->body(trim(($order->outlet?->name ?? '') . ' · ' . ($order->table_no ?: 'counter')))
                 ->url(route('point-of-sale.kitchen-display'))
                 ->send();
-
-            // Only when the guest chose to leave a number or address on the
-            // menu page — nobody is made to give one, so most requests skip
-            // this silently, same as a walk-in the system has no number for.
             if ($guestRequest->guest_mobile || $guestRequest->guest_email) {
                 GuestMessage::send('guest.pos-order', $guestRequest->guest_mobile, [
                     'guest' => null,
@@ -145,8 +117,6 @@ class GuestRequestController extends Controller
 
         return back()->with('status', $message);
     }
-
-    /** POST point-of-sale/pos/guest-requests/{guestRequest}/reject */
     public function reject(Request $request, int $guestRequest): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();

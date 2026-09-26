@@ -14,14 +14,7 @@ use App\Models\Pos\PosSteward;
 use App\Models\Pos\PosTable;
 use Illuminate\View\View;
 
-/**
- * The Setup index — the way in to everything a POS has to be told before it can
- * sell anything.
- *
- * The order is the order a hotel actually fills them in: outlets first (nothing
- * else can be created without one), then the seating, then the menu tree, then
- * the small lists that hang off a bill.
- */
+
 class SetupController extends Controller
 {
     public function index(): View

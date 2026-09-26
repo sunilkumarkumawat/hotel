@@ -13,17 +13,8 @@ use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * What is on the shelf, what it is worth, and how it got there.
- *
- * Two screens. The stock sheet is what a storekeeper counts against; the
- * ledger is what answers "why does the book say forty kilos?" — and it can
- * answer it, because every movement since the day the item was created is
- * still there.
- */
 class StockController extends Controller
 {
-    /** GET store/stock */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -57,7 +48,6 @@ class StockController extends Controller
         ]);
     }
 
-    /** GET store/stock/export */
     public function export(Request $request): StreamedResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -87,7 +77,6 @@ class StockController extends Controller
         }, 'stock-' . today()->toDateString() . '.csv', ['Content-Type' => 'text/csv']);
     }
 
-    /** GET store/stock/{item} — one item's whole history. */
     public function ledger(Request $request, StoreItem $item): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -103,13 +92,6 @@ class StockController extends Controller
         ]);
     }
 
-    /**
-     * POST store/stock/{item}/rebuild
-     *
-     * The button behind "are these numbers right?". It replays the item's
-     * whole ledger and writes the balances again, so the answer can be
-     * produced rather than argued about.
-     */
     public function rebuild(StoreItem $item): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -128,8 +110,6 @@ class StockController extends Controller
     }
 
     /**
-     * The window a report covers — this month so far, by default.
-     *
      * @return array{0: string, 1: string}
      */
     private function range(Request $request): array

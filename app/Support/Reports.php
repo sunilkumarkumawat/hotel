@@ -68,24 +68,40 @@ class Reports
             ->orderBy('rr.arrival_date')
             ->orderBy('r.reservation_no')
             ->get([
-                'rr.arrival_date', 'rr.arrival_time', 'rr.checkout_date', 'rr.no_of_rooms', 'rr.no_of_days',
+                'rr.id as rr_id', 'rr.arrival_date', 'rr.arrival_time', 'rr.checkout_date', 'rr.no_of_rooms', 'rr.no_of_days',
                 'rr.male', 'rr.female', 'rr.child', 'rr.net_amount',
                 'r.reservation_no', 'r.first_name', 'r.last_name', 'r.mobile', 'r.status',
                 'rt.name as room_type', 'ro.room_no',
-            ])
-            ->map(fn ($row) => (object) [
-                'date' => self::day($row->arrival_date),
-                'reservation_no' => $row->reservation_no,
-                'guest' => trim($row->first_name . ' ' . $row->last_name),
-                'mobile' => $row->mobile,
-                'room_type' => $row->room_type ?: '—',
-                'room_no' => $row->room_no ?: 'not allotted',
-                'rooms' => (int) $row->no_of_rooms,
-                'nights' => (int) $row->no_of_days,
-                'pax' => (int) $row->male + (int) $row->female + (int) $row->child,
-                'status' => ucfirst(str_replace('_', ' ', (string) $row->status)),
-                'amount' => (float) $row->net_amount,
             ]);
+
+        // A multi-room booking row never gets rr.room_id filled in — see the
+        // comment in CheckInController::store() — so a booking still waiting
+        // on some of its rooms (the rest already arrived) reads as
+        // unallotted here even though the guests who did arrive already
+        // have a real room each. Pulled once for the whole report and
+        // grouped back below, the same bulk-lookup shape reportInHouse()
+        // uses instead of a query per row.
+        $checkedInRooms = DB::table('check_ins as ci')
+            ->join('rooms as cr', 'cr.id', '=', 'ci.room_id')
+            ->whereIn('ci.reservation_room_id', $rows->pluck('rr_id'))
+            ->orderBy('cr.room_no')
+            ->get(['ci.reservation_room_id', 'cr.room_no'])
+            ->groupBy('reservation_room_id')
+            ->map(fn ($g) => $g->pluck('room_no')->unique()->implode(', '));
+
+        $rows = $rows->map(fn ($row) => (object) [
+            'date' => self::day($row->arrival_date),
+            'reservation_no' => $row->reservation_no,
+            'guest' => trim($row->first_name . ' ' . $row->last_name),
+            'mobile' => $row->mobile,
+            'room_type' => $row->room_type ?: '—',
+            'room_no' => ($checkedInRooms[$row->rr_id] ?? $row->room_no) ?: 'not allotted',
+            'rooms' => (int) $row->no_of_rooms,
+            'nights' => (int) $row->no_of_days,
+            'pax' => (int) $row->male + (int) $row->female + (int) $row->child,
+            'status' => ucfirst(str_replace('_', ' ', (string) $row->status)),
+            'amount' => (float) $row->net_amount,
+        ]);
 
         return [
             'columns' => [
@@ -287,6 +303,143 @@ class Reports
                 ['label' => 'Room nights', 'value' => $rows->sum('nights'), 'icon' => 'calendar'],
                 ['label' => 'Walk-ins', 'value' => $rows->where('source', 'Walk-in')->count(), 'icon' => 'desktop'],
             ],
+        ];
+    }
+
+    /**
+     * Check In / Check Out — every arrival and departure as one list, not the
+     * two the front desk otherwise has to open separately.
+     *
+     * `status` picks which date each row is matched on: 'checkin' matches
+     * checkin_date, 'checkout' matches the actual date if the guest has left
+     * or the expected date if not, and 'both' (the default) matches a row
+     * that falls in range on either — so a guest who both arrived and left
+     * inside a short range is not shown twice, and one who only did one of
+     * the two is not left out of "both".
+     *
+     * Charged/paid/due is the same bulk-aggregate shape reportInHouse()
+     * uses — one query for every folio's charges and one for its payments,
+     * not a Folio lookup per row — and it is read the same way whether the
+     * guest is still in house or has already checked out, so a due settled
+     * after checkout (see CheckOutController::pay) shows here immediately.
+     */
+    private static function reportCheckInOut(int $branchId, array $filters): array
+    {
+        $next = self::next($filters['to']);
+        $mode = in_array($filters['status'] ?? null, ['checkin', 'checkout'], true) ? $filters['status'] : 'both';
+
+        $query = DB::table('check_ins as ci')
+            ->leftJoin('rooms as ro', 'ro.id', '=', 'ci.room_id')
+            ->leftJoin('room_type as rt', 'rt.id', '=', 'ro.room_type_id')
+            ->leftJoin('reservations as r', 'r.id', '=', 'ci.reservation_id')
+            ->leftJoin('booked_by as bb', 'bb.id', '=', 'r.booked_by_id')
+            ->leftJoin('users as u', 'u.user_id', '=', 'ci.created_by')
+            ->where('ci.branch_id', $branchId)
+            ->where('ci.status', '!=', 'cancelled');
+
+        if ($mode === 'checkin') {
+            $query->where('ci.checkin_date', '>=', $filters['from'])
+                ->where('ci.checkin_date', '<', $next);
+        } elseif ($mode === 'checkout') {
+            $query->whereRaw('COALESCE(ci.actual_checkout_date, ci.expected_checkout_date) >= ?', [$filters['from']])
+                ->whereRaw('COALESCE(ci.actual_checkout_date, ci.expected_checkout_date) < ?', [$next]);
+        } else {
+            $query->where(function ($q) use ($filters, $next) {
+                $q->where(fn ($q2) => $q2->where('ci.checkin_date', '>=', $filters['from'])
+                    ->where('ci.checkin_date', '<', $next))
+                    ->orWhere(fn ($q2) => $q2->whereRaw('COALESCE(ci.actual_checkout_date, ci.expected_checkout_date) >= ?', [$filters['from']])
+                        ->whereRaw('COALESCE(ci.actual_checkout_date, ci.expected_checkout_date) < ?', [$next]));
+            });
+        }
+
+        $rows = $query
+            ->when($filters['room_type'] ?? null, fn ($q, $id) => $q->where('ro.room_type_id', $id))
+            ->when($filters['booking_source'] ?? null, fn ($q, $id) => $q->where('r.booked_by_id', $id))
+            ->when($filters['staff'] ?? null, fn ($q, $id) => $q->where('ci.created_by', $id))
+            ->orderBy('ci.checkin_date')
+            ->get([
+                'ci.id', 'ci.folio_no', 'ci.guest_name', 'ci.mobile', 'ci.status', 'ci.is_direct',
+                'ci.checkin_date', 'ci.expected_checkout_date', 'ci.actual_checkout_date',
+                'ro.room_no', 'rt.name as room_type', 'bb.name as source', 'u.name as staff',
+            ]);
+
+        $ids = $rows->pluck('id');
+
+        $charged = DB::table('folio_charges')
+            ->whereIn('check_in_id', $ids)
+            ->groupBy('check_in_id')
+            ->selectRaw('check_in_id, SUM(total_amount) as total')
+            ->pluck('total', 'check_in_id');
+
+        $paid = DB::table('settlements')
+            ->whereIn('check_in_id', $ids)
+            ->groupBy('check_in_id')
+            ->selectRaw('check_in_id, SUM(amount) as total')
+            ->pluck('total', 'check_in_id');
+
+        $rows = $rows->map(fn ($row) => (object) [
+            'checkin_date' => self::day($row->checkin_date),
+            'checkout_date' => $row->actual_checkout_date
+                ? self::day($row->actual_checkout_date)
+                : self::day($row->expected_checkout_date) . ' (due)',
+            'folio_no' => $row->folio_no,
+            'guest' => $row->guest_name,
+            'mobile' => $row->mobile ?: '—',
+            'room_no' => $row->room_no ?: '—',
+            'room_type' => $row->room_type ?: '—',
+            'status' => $row->status === 'checked_out' ? 'Checked out' : 'In house',
+            'source' => (int) $row->is_direct === 1 ? 'Walk-in' : ($row->source ?: '—'),
+            'staff' => $row->staff ?: '—',
+            'charged' => round((float) ($charged[$row->id] ?? 0), 2),
+            'paid' => round((float) ($paid[$row->id] ?? 0), 2),
+            'due' => round((float) ($charged[$row->id] ?? 0) - (float) ($paid[$row->id] ?? 0), 2),
+            // Not a displayed column (see reports/show.blade.php's $columns
+            // loop) — just what the Settle button on this report needs to
+            // know which stay to pay against. CheckOutController::pay()
+            // already accepts an in-house or a checked-out stay alike, so
+            // this works whether or not the guest has left yet.
+            'check_in_id' => $row->id,
+        ]);
+
+        // Due/paid depends on the bulk aggregates above, so it can only be
+        // filtered here — after the rows are mapped, not in the query.
+        if (($filters['payment_status'] ?? null) === 'due') {
+            $rows = $rows->where('due', '>', 0)->values();
+        } elseif (($filters['payment_status'] ?? null) === 'paid') {
+            $rows = $rows->where('due', '<=', 0)->values();
+        }
+
+        return [
+            'columns' => [
+                'checkin_date' => ['label' => 'Checked in'],
+                'checkout_date' => ['label' => 'Checked out'],
+                'folio_no' => ['label' => 'Folio'],
+                'guest' => ['label' => 'Guest'],
+                'mobile' => ['label' => 'Mobile'],
+                'room_no' => ['label' => 'Room'],
+                'room_type' => ['label' => 'Room type'],
+                'status' => ['label' => 'Status'],
+                'source' => ['label' => 'Source'],
+                'staff' => ['label' => 'Staff'],
+                'charged' => ['label' => 'Charged', 'num' => true, 'money' => true],
+                'paid' => ['label' => 'Paid', 'num' => true, 'money' => true],
+                'due' => ['label' => 'Due', 'num' => true, 'money' => true],
+            ],
+            'rows' => $rows,
+            'totals' => ['charged' => $rows->sum('charged'), 'paid' => $rows->sum('paid'), 'due' => $rows->sum('due')],
+            'summary' => [
+                ['label' => 'Guests', 'value' => $rows->count(), 'icon' => 'users'],
+                ['label' => 'Still in house', 'value' => $rows->where('status', 'In house')->count(), 'icon' => 'home'],
+                ['label' => 'Checked out', 'value' => $rows->where('status', 'Checked out')->count(), 'icon' => 'logout'],
+                [
+                    'label' => 'Still due',
+                    'value' => self::money($rows->sum('due')),
+                    'icon' => 'alert',
+                    'tone' => $rows->sum('due') > 0 ? 'warning' : 'success',
+                ],
+            ],
+            'note' => 'Check-in and check-out together by default — use the Status filter to see only one. '
+                . 'A checkout date marked "(due)" has not happened yet; that is the guest\'s expected date.',
         ];
     }
 
@@ -722,7 +875,7 @@ class Reports
             ->orderBy('b.bill_date')
             ->get([
                 'b.bill_no', 'b.group_no', 'b.bill_date', 'b.net_amount', 'b.paid_amount', 'b.balance_amount',
-                'ci.folio_no', 'ci.guest_name', 'ci.mobile', 'ro.room_no',
+                'b.check_in_id', 'ci.folio_no', 'ci.guest_name', 'ci.mobile', 'ro.room_no',
             ])
             ->map(fn ($row) => (object) [
                 'bill_date' => self::day($row->bill_date),
@@ -731,10 +884,17 @@ class Reports
                 'guest' => $row->guest_name ?: '—',
                 'room_no' => $row->room_no ?: '—',
                 'mobile' => $row->mobile ?: '—',
-                'age' => CarbonImmutable::parse(substr((string) $row->bill_date, 0, 10))->diffInDays(now()) . ' days',
+                // Carbon 3's diffInDays() is fractional by default (17.4
+                // days) — floored here because a bill has been outstanding
+                // for a whole number of days on a report, never a decimal.
+                'age' => (int) CarbonImmutable::parse(substr((string) $row->bill_date, 0, 10))->diffInDays(now()) . ' days',
                 'amount' => (float) $row->net_amount,
                 'paid' => (float) $row->paid_amount,
                 'due' => (float) $row->balance_amount,
+                // Not a displayed column (see reports/show.blade.php's
+                // $columns loop) — just what the Settle button on this one
+                // report needs to know which stay to pay against.
+                'check_in_id' => $row->check_in_id,
             ]);
 
         return [

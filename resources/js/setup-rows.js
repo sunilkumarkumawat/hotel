@@ -1,15 +1,15 @@
 /*
  * Adding and removing rows on a Setup list that saves a batch at once.
  *
- * The server renders three blank rows and a <template> holding a fourth with
+ * The server renders one blank row and a <template> holding another with
  * __i__ where its number goes. Everything here does is copy that template,
  * stamp the next number into it, and put it above the button bar. Nothing is
  * validated, nothing is posted, nothing is remembered: the form is an ordinary
  * form and the server is the only thing that decides what a valid row is.
  *
  * The two buttons ship hidden and are revealed here, so a browser with scripts
- * blocked never shows a button that does nothing — it simply gets the three
- * rows the server rendered, which still save.
+ * blocked never shows a button that does nothing — it simply gets the one row
+ * the server rendered, which still saves.
  */
 (function () {
     'use strict';
@@ -166,5 +166,38 @@
         if (next) {
             next.focus();
         }
+    });
+})();
+
+/*
+ * A photo chosen while a row is still being typed shows as a thumbnail right
+ * away, instead of leaving the upload icon sitting there with no sign of what
+ * was picked. Delegated to the document rather than bound per input, so it
+ * covers rows the Add button clones after this script has already run.
+ */
+(function () {
+    'use strict';
+
+    document.addEventListener('change', function (event) {
+        var input = event.target.closest ? event.target.closest('[data-item-photo-input]') : null;
+
+        if (!input) {
+            return;
+        }
+
+        var file = input.files && input.files[0];
+        var wrap = input.closest('.nv-item-photo-form');
+        var label = wrap ? wrap.querySelector('label') : null;
+
+        if (!file || !label) {
+            return;
+        }
+
+        var image = document.createElement('img');
+        image.src = URL.createObjectURL(file);
+        image.alt = '';
+
+        label.innerHTML = '';
+        label.appendChild(image);
     });
 })();

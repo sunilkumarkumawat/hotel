@@ -45,7 +45,29 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            /*
+             * How long one connect-or-read on the SMTP socket may take before
+             * Symfony Mailer gives up and throws a normal, catchable
+             * TransportException.
+             *
+             * Left at Laravel's own default (null) this key does not even
+             * reach the transport — PHP falls back to `default_socket_timeout`
+             * (60s on most installs), the same number as `max_execution_time`.
+             * The two then race on a slow or unreachable mail host, and PHP
+             * sometimes wins that race with a *fatal* "Maximum execution time
+             * exceeded" — not a catchable exception, so nothing in Notify or
+             * GuestMessage (both already wrapped in try/catch) can stop it,
+             * and it takes down whatever request happened to trigger the
+             * notification (a checkout, a booking, a shift close) with it.
+             *
+             * Ten seconds is generous for a real SMTP conversation — the
+             * "Check the mail server now" probe completes in a few seconds
+             * against this same host — while leaving huge headroom under the
+             * 60s limit, so a hung connection now fails on its own as an
+             * ordinary error the delivery log can record, instead of an error
+             * page the guest is standing in front of.
+             */
+            'timeout' => (int) env('MAIL_TIMEOUT', 10),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url(env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
         ],
 

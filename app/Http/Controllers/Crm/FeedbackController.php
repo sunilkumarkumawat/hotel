@@ -11,16 +11,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
-/**
- * What guests said after they left, and what the hotel did about it.
- *
- * The screen is an inbox rather than a report. Averages are at the top because
- * somebody asks for them, but the thing it is built around is the list of low
- * scores nobody has dealt with — the only part of this that is a to-do list.
- */
 class FeedbackController extends Controller
 {
-    /** GET crm/feedback */
+
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -52,13 +45,6 @@ class FeedbackController extends Controller
             'areas' => GuestFeedback::AREAS,
         ]);
     }
-
-    /**
-     * POST crm/feedback/{feedback}/handled
-     *
-     * Marking it handled takes a note, because "handled" with nothing written
-     * down is a tick box somebody presses to clear a list.
-     */
     public function handled(Request $request, GuestFeedback $feedback): RedirectResponse
     {
         abort_unless((int) $feedback->branch_id === (int) Helper::getActiveBranchId(), 404);
@@ -77,11 +63,6 @@ class FeedbackController extends Controller
     }
 
     /**
-     * The window the screen is looking at — this month by default.
-     *
-     * Feedback is read while it is still worth acting on, so this one does NOT
-     * default to last month the way the GST screen does.
-     *
      * @return array{0: string, 1: string}
      */
     private function range(Request $request): array

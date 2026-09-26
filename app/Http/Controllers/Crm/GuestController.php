@@ -5,27 +5,42 @@ namespace App\Http\Controllers\Crm;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
 use App\Models\Crm\GuestNote;
+use App\Models\FrontOffice\CheckIn;
 use App\Models\Master\Guest;
 use App\Support\GuestCrm;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The guest, rather than the booking.
- *
- * Everything on these two screens already existed somewhere in the system —
- * the stays, the money, the complaint somebody remembers. What was missing was
- * a place where it is all one person.
- *
- * The profile is written so that the first thing a receptionist sees when a
- * name comes up is what they can do something about: what this guest asks for,
- * and anything that went wrong last time.
- */
 class GuestController extends Controller
 {
+
+    public function search(Request $request): JsonResponse
+    {
+        $guests = Guest::query()
+            ->forBranch()
+            ->search($request->string('q')->toString())
+            ->orderBy('first_name')
+            ->limit(8)
+            ->get();
+
+        $activeCheckIns = CheckIn::query()
+            ->inHouse()
+            ->whereIn('guest_id', $guests->pluck('id'))
+            ->pluck('id', 'guest_id');
+
+        return response()->json($guests->map(fn (Guest $g) => [
+            'id' => $g->id,
+            'name' => $g->name,
+            'mobile' => $g->mobile,
+            'email' => $g->email,
+            'active_check_in_id' => $activeCheckIns->get($g->id),
+        ]));
+    }
+
     /** GET crm/guests */
     public function index(Request $request): View
     {

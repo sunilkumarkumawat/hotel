@@ -211,6 +211,7 @@ return [
         . "Your order has been sent to the kitchen.\n\n"
         . "*Where:* {where}\n"
         . "*Items:* {items}\n\n"
+        . "{attachment}\n"
         . "_We'll have it ready shortly._",
 
 ];

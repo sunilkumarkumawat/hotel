@@ -255,21 +255,54 @@ class GuestDocument
             return;
         }
 
-        $brand = [0.36, 0.09, 0.27];
-        $onBrand = [1, 1, 1];
-        $soft = [0.88, 0.82, 0.88];
-        $pdf->box(0, 0, Pdf::A4_WIDTH, 96, $brand);
-        $pdf->textAt(strtoupper($hotel['hotel']), $pdf->left(), 26, 19, true, 'left', $onBrand);
+        // Every other document: the same teal-and-gold family as the booking
+        // voucher, so every PDF a guest gets looks like it came from one
+        // hotel — just without the two-tier "BOOKING / CONFIRMATION VOUCHER"
+        // split, which only ever made sense for that one document.
+        $teal = [0.00, 0.31, 0.27];
+        $gold = [0.72, 0.49, 0.12];
+        $soft = [0.91, 0.96, 0.94];
+        $white = [1, 1, 1];
+
+        $pdf->box(0, 0, Pdf::A4_WIDTH, 118, $teal);
+        $initial = strtoupper(substr(trim((string) $hotel['hotel']), 0, 1)) ?: 'H';
+        $pdf->textAt($initial, $pdf->left(), 20, 34, true, 'left', $gold, 34);
+        $pdf->textAt($hotel['hotel'], $pdf->left() + 42, 26, 17, true, 'left', $white, 250);
         $under = array_filter([$hotel['address'], $hotel['phone']]);
         if ($under) {
-            $pdf->textAt(implode('  ·  ', $under), $pdf->left(), 56, 9, false, 'left', $soft);
+            $pdf->textAt(implode('  ·  ', $under), $pdf->left() + 43, 50, 7.5, false, 'left', $soft, 250);
         }
-        $pdf->textAt(strtoupper((string) ($definition['title'] ?? 'Document')), $pdf->left(), 28, 11.5, true, 'right', $onBrand, $pdf->width());
+        $pdf->textAt(strtoupper((string) ($definition['title'] ?? 'Document')), 330, 30, 13, true, 'right', $white, 205);
         $reference = self::fill((string) ($definition['reference'] ?? ''), $data);
         if ($reference !== '') {
-            $pdf->textAt($reference, $pdf->left(), 56, 10, false, 'right', $soft, $pdf->width());
+            $pdf->textAt($reference, 330, 50, 9.5, false, 'right', $soft, 205);
         }
-        $pdf->textAt('Issued ' . now()->format('d M Y, h:i A'), $pdf->left(), 72, 8, false, 'right', $soft, $pdf->width());
+        $pdf->textAt('Issued ' . now()->format('d M Y, h:i A'), 330, 66, 7.5, false, 'right', $soft, 205);
+
+        /*
+         * A document about money says, at a glance, whether the guest still
+         * owes anything — the first thing the desk itself would tell them.
+         * Only kicks in when the call site actually put a balance in the
+         * data (checkout, a payment, an advance): an event with nothing to
+         * settle, like a registration slip or a kitchen order, keeps
+         * whatever badge its config names instead.
+         */
+        $badge = strtoupper((string) ($definition['badge'] ?? 'CONFIRMED'));
+        $badgeInk = $teal;
+        $badgeBg = [0.93, 0.98, 0.96];
+
+        if (array_key_exists('balance', $data)) {
+            $due = self::fill('{balance}', $data) !== '';
+            $badge = $due ? 'BALANCE DUE' : 'SETTLED';
+            if ($due) {
+                $badgeInk = [0.62, 0.14, 0.09];
+                $badgeBg = [0.99, 0.93, 0.91];
+            }
+        }
+
+        $badgeW = max(96, min(200, $pdf->textWidth($badge, 9.5, true) + 40));
+        $pdf->box($pdf->right() - $badgeW, 78, $badgeW, 25, $badgeBg);
+        $pdf->textAt($badge, $pdf->right() - $badgeW, 85, 9.5, true, 'center', $badgeInk, $badgeW);
     }
 
     /**
@@ -283,16 +316,43 @@ class GuestDocument
             return;
         }
 
-        $muted = [0.35, 0.35, 0.40];
+        self::genericBody($pdf, $definition, $data);
+    }
+
+    /**
+     * Every document except the booking voucher: the same card-and-highlight
+     * language as {@see bookingBody()}, laid out from whatever `sections`
+     * (and optionally `highlight`) config/guest-documents.php gives the
+     * event, rather than a fixed set of fields hand-placed for one event.
+     * That is what makes a rich, on-brand PDF available to every event a
+     * hotel adds a section to, not only the one document somebody once sat
+     * down and designed by hand.
+     *
+     * @param  array<string, mixed>  $definition
+     * @param  array<string, mixed>  $data
+     */
+    private static function genericBody(Pdf $pdf, array $definition, array $data): void
+    {
+        $teal = [0.00, 0.31, 0.27];
+        $ink = [0.10, 0.13, 0.16];
+        $muted = [0.38, 0.42, 0.43];
         $faint = [0.55, 0.55, 0.60];
-        $pdf->at(132);
+        $pale = [0.93, 0.97, 0.95];
+
+        $pdf->at(140);
+
         if ($greeting = self::fill((string) ($definition['greeting'] ?? ''), $data)) {
-            $pdf->text($greeting, 12.5, true);
-            $pdf->gap(2);
+            $pdf->text($greeting, 13, true, 'left', $ink);
+            $pdf->gap(1);
         }
+
         if ($lead = self::fill((string) ($definition['lead'] ?? ''), $data)) {
-            $pdf->paragraph($lead, 10, false, $muted);
+            $pdf->paragraph($lead, 9.5, false, $muted);
         }
+
+        $labelW = $pdf->width() * 0.32;
+        $valueW = $pdf->width() - $labelW - 24;
+
         foreach ((array) ($definition['sections'] ?? []) as $heading => $rows) {
             $filled = [];
             foreach ((array) $rows as $label => $pattern) {
@@ -300,15 +360,103 @@ class GuestDocument
                 if ($value !== '') $filled[$label] = $value;
             }
             if ($filled === []) continue;
-            $pdf->gap(10)->rule();
-            $pdf->text(strtoupper((string) $heading), 8.5, true, 'left', $faint);
-            $pdf->gap(4);
-            foreach ($filled as $label => $value) $pdf->row((string) $label, $value);
+
+            /*
+             * Measured before anything is drawn. This class draws top-down
+             * with no way to go back and stretch a box once something has
+             * been placed below it, and a row's value — an item list most of
+             * all — can wrap onto more than one line, where the old flat
+             * layout silently kept only the first.
+             */
+            $rowLines = [];
+            $bodyH = 0;
+            foreach ($filled as $label => $value) {
+                $lines = $pdf->wrap($value, $valueW, 8.6, true) ?: [''];
+                $rowLines[$label] = $lines;
+                $bodyH += max(20, count($lines) * 12 + 8);
+            }
+
+            $top = $pdf->cursor() + 10;
+            $boxH = 30 + $bodyH;
+
+            $pdf->box($pdf->left(), $top, $pdf->width(), $boxH, [0.98, 0.99, 0.99]);
+            $pdf->box($pdf->left(), $top, $pdf->width(), 24, $pale);
+            $pdf->textAt(strtoupper((string) $heading), $pdf->left() + 12, $top + 7, 8.5, true, 'left', $teal, $pdf->width() - 24);
+
+            $y = $top + 24 + 10;
+            foreach ($filled as $label => $value) {
+                $lines = $rowLines[$label];
+                $pdf->textAt((string) $label, $pdf->left() + 12, $y, 8.4, false, 'left', $muted, $labelW);
+                foreach ($lines as $i => $line) {
+                    $pdf->textAt($line, $pdf->left() + $labelW + 12, $y + $i * 12, 8.6, true, 'left', $ink, $valueW);
+                }
+                $y += max(20, count($lines) * 12 + 8);
+            }
+
+            $pdf->at($top + $boxH + 14);
         }
+
+        if ($highlight = $definition['highlight'] ?? null) {
+            self::highlightBox($pdf, (array) $highlight, $data);
+        }
+
         if ($note = self::fill((string) ($definition['note'] ?? ''), $data)) {
-            $pdf->gap(12)->rule();
+            $pdf->gap(8)->rule();
             $pdf->paragraph($note, 9, false, $faint);
         }
+    }
+
+    /**
+     * The gold callout every money-bearing document gets — the same shape as
+     * the TOTAL AMOUNT box on the booking voucher, driven by config instead
+     * of being that one document's own hand-placed code.
+     *
+     * @param  array<string, mixed>  $highlight  'label', 'value' ({pattern}) and an optional
+     *                                            'sub' — a label => {pattern} map, e.g.
+     *                                            ['Paid' => '{paid}', 'Balance' => '{balance}'].
+     *                                            Each piece is filled and dropped on its own, the
+     *                                            same as a section row — so "Balance: {balance}"
+     *                                            with nothing paid off does not leave a dangling
+     *                                            "Balance:" the way one combined string would.
+     * @param  array<string, mixed>  $data
+     */
+    private static function highlightBox(Pdf $pdf, array $highlight, array $data): void
+    {
+        $value = self::fill((string) ($highlight['value'] ?? ''), $data);
+
+        if ($value === '') {
+            return;
+        }
+
+        $teal = [0.00, 0.31, 0.27];
+        $gold = [0.72, 0.49, 0.12];
+        $muted = [0.38, 0.42, 0.43];
+        $pale = [0.93, 0.97, 0.95];
+
+        $subParts = [];
+        foreach ((array) ($highlight['sub'] ?? []) as $subLabel => $pattern) {
+            $piece = self::fill((string) $pattern, $data);
+            if ($piece !== '') {
+                $subParts[] = $subLabel . ': ' . $piece;
+            }
+        }
+        $sub = implode('   ', $subParts);
+
+        $top = $pdf->cursor() + 4;
+        $boxH = $sub !== '' ? 78 : 62;
+
+        $pdf->box($pdf->left(), $top, $pdf->width(), $boxH, [0.98, 0.99, 0.99]);
+        $pdf->box($pdf->left() + $pdf->width() - 220, $top + 8, 208, $boxH - 16, $pale);
+
+        $label = strtoupper((string) ($highlight['label'] ?? 'TOTAL'));
+        $pdf->textAt($label, $pdf->left() + $pdf->width() - 208, $top + 18, 8, true, 'left', $teal, 190);
+        $pdf->textAt($value, $pdf->left() + $pdf->width() - 208, $top + 36, 18, true, 'left', $gold, 190);
+
+        if ($sub !== '') {
+            $pdf->textAt($sub, $pdf->left() + $pdf->width() - 208, $top + 58, 7.5, false, 'left', $muted, 190);
+        }
+
+        $pdf->at($top + $boxH + 14);
     }
 
     /** Branded one-page booking confirmation layout. */
@@ -350,9 +498,25 @@ class GuestDocument
         foreach ($guestRows as $label => $value) {
             if ($value === '') continue;
             $pdf->textAt($label, $left + 12, $y, 8.2, false, 'left', $muted, 70);
+
+            // A long address can run to several lines — the card has fixed
+            // headroom for four before it would crowd Room Details below, so
+            // anything longer is trimmed with an ellipsis rather than having
+            // its last part vanish with no sign it was ever there.
             $lines = $pdf->wrap($value, $cardW - 98, 8.2);
-            $pdf->textAt($lines[0] ?? '', $left + 86, $y, 8.2, false, 'left', $ink, $cardW - 98);
-            $y += 28;
+            $maxLines = 4;
+            $shown = array_slice($lines, 0, $maxLines);
+            if (count($lines) > $maxLines) {
+                $last = $shown[$maxLines - 1];
+                while ($last !== '' && $pdf->textWidth($last . '...', 8.2) > $cardW - 98) {
+                    $last = rtrim(mb_substr($last, 0, -1));
+                }
+                $shown[$maxLines - 1] = $last . '...';
+            }
+            foreach ($shown as $i => $line) {
+                $pdf->textAt($line, $left + 86, $y + ($i * 10), 8.2, false, 'left', $ink, $cardW - 98);
+            }
+            $y += 28 + (count($shown) - 1) * 10;
         }
 
         $y = $top + 40;
@@ -379,8 +543,26 @@ class GuestDocument
         $pdf->textAt(self::fill('{room_type}', $data), $left + 86, $roomTop + 39, 8.8, true, 'left', $ink, 135);
         $pdf->textAt('Room No.', $left + 235, $roomTop + 39, 8.2, false, 'left', $muted, 55);
         $pdf->textAt(self::fill('{room_no}', $data), $left + 292, $roomTop + 39, 8.8, true, 'left', $ink, 95);
-        $pdf->textAt('Meal Plan', $left + 392, $roomTop + 39, 8.2, false, 'left', $muted, 58);
-        $pdf->textAt(self::fill('{meal_plan}', $data), $left + 452, $roomTop + 39, 8.8, true, 'left', $ink, 70);
+        // Meal Plan gets its own line rather than a cramped third column — a
+        // descriptive plan name ("CP (Breakfast Included)") needs more room
+        // than the ~50pt a same-row column would leave before the page edge.
+        $mealValue = self::fill('{meal_plan}', $data);
+        if ($mealValue !== '') {
+            $pdf->textAt('Meal Plan', $left + 12, $roomTop + 53, 8.2, false, 'left', $muted, 70);
+            $mealW = $pdf->width() - 98;
+            $mealLines = $pdf->wrap($mealValue, $mealW, 8.8, true);
+            $mealShown = array_slice($mealLines, 0, 2);
+            if (count($mealLines) > 2) {
+                $last = $mealShown[1];
+                while ($last !== '' && $pdf->textWidth($last . '...', 8.8, true) > $mealW) {
+                    $last = rtrim(mb_substr($last, 0, -1));
+                }
+                $mealShown[1] = $last . '...';
+            }
+            foreach ($mealShown as $i => $line) {
+                $pdf->textAt($line, $left + 86, $roomTop + 53 + ($i * 10), 8.8, true, 'left', $ink, $mealW);
+            }
+        }
 
         $payTop = $roomTop + 92;
         $pdf->box($left, $payTop, $pdf->width(), 92, [0.98, 0.99, 0.99]);

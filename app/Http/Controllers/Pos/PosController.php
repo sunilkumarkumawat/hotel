@@ -26,27 +26,10 @@ use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use RuntimeException;
 
-/**
- * The till.
- *
- * Two screens and a handful of actions: the floor (what is running on which
- * table, or in which room) and the bill (what is on one order). Everything that
- * changes an order goes through App\Support\PosTill — this class only decides
- * who may do it and where they end up afterwards.
- *
- * The outlet and the mode live in the query string rather than in the session.
- * A cashier who has two outlets open in two tabs is a normal Saturday night,
- * and session state would have one tab quietly billing to the other's series.
- */
+
 class PosController extends Controller
 {
-    /*
-    |--------------------------------------------------------------------------
-    | The floor
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET point-of-sale/pos */
+ 
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -56,10 +39,6 @@ class PosController extends Controller
         if (! $outlet) {
             return view('pos.till.no-outlet');
         }
-
-        // Restaurant is the floor plan; Room is the house. Room mode is only
-        // offered by an outlet that has been switched on for room service —
-        // the bar that only sells over its own counter never shows it.
         $mode = $this->mode($request) === 'room' && $outlet->pos_room_service
             ? 'room'
             : 'restaurant';
@@ -86,13 +65,6 @@ class PosController extends Controller
         ]);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Opening an order
-    |--------------------------------------------------------------------------
-    */
-
-    /** POST point-of-sale/pos/table/{table} */
     public function openTable(Request $request, int $table): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -103,7 +75,6 @@ class PosController extends Controller
         return redirect()->route('point-of-sale.pos.order', $till->order()->id);
     }
 
-    /** POST point-of-sale/pos/room/{stay} */
     public function openRoom(Request $request, int $stay): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -120,7 +91,6 @@ class PosController extends Controller
         return redirect()->route('point-of-sale.pos.order', $till->order()->id);
     }
 
-    /** POST point-of-sale/pos/counter — take away and delivery, which hold no table. */
     public function openCounter(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -137,13 +107,6 @@ class PosController extends Controller
         return redirect()->route('point-of-sale.pos.order', $till->order()->id);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | The bill
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET point-of-sale/pos/order/{order} */
     public function order(Request $request, int $order): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -177,7 +140,6 @@ class PosController extends Controller
         ]);
     }
 
-    /** POST point-of-sale/pos/order/{order}/item */
     public function addItem(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -187,9 +149,6 @@ class PosController extends Controller
             'item_id' => 'required|integer',
             'qty' => 'nullable|numeric|min:0.01|max:999',
             'remark' => 'nullable|string|max:120',
-            // Posted as modifiers[<group id>][] — see PosTill::resolveModifiers()
-            // for why the group id in the shape does not need to be trusted;
-            // only the flattened list of modifier ids is ever read.
             'modifiers' => 'nullable|array',
             'modifiers.*' => 'nullable|array',
             'modifiers.*.*' => 'nullable|integer',
@@ -215,8 +174,43 @@ class PosController extends Controller
             $item->name . ' added.'
         );
     }
+    public function scanItem(Request $request, int $order): RedirectResponse
+    {
+        $branchId = (int) Helper::getActiveBranchId();
+        $posOrder = $this->find($order, $branchId);
 
-    /** PUT point-of-sale/pos/order/{order}/item/{line} */
+        $data = $request->validate([
+            'barcode' => 'required|string|max:30',
+        ]);
+
+        $code = trim($data['barcode']);
+
+        $item = PosMenuItem::query()
+            ->forBranch($branchId)
+            ->sellable()
+            ->with(['modifierGroups' => fn ($q) => $q->active(), 'modifierGroups.modifiers' => fn ($q) => $q->active()])
+            ->where('code', $code)
+            ->first();
+
+        if (! $item) {
+            return back()->with('error', "No item is set up with the code \"{$code}\".");
+        }
+
+        $hasModifiers = $item->modifierGroups->contains(fn ($group) => $group->modifiers->isNotEmpty());
+
+        if ($hasModifiers) {
+            return redirect(route('point-of-sale.pos.order', $posOrder->id) . '#item-mods-' . $item->id)
+                ->with('status', $item->name . ' scanned — choose its options below.');
+        }
+
+        return $this->act(
+            fn () => PosTill::for($posOrder)->addItem($item),
+            $request,
+            $posOrder,
+            $item->name . ' added.'
+        );
+    }
+
     public function updateItem(Request $request, int $order, int $line): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -224,8 +218,6 @@ class PosController extends Controller
         $row = $this->line($posOrder, $line);
 
         $data = $request->validate([
-            // Not min:0 — zero would be a deletion, and deletions answer to the
-            // delete permission on their own route.
             'qty' => 'nullable|numeric|min:0.01|max:999',
             'step' => 'nullable|integer|min:-99|max:99',
             'remark' => 'nullable|string|max:120',
@@ -243,13 +235,6 @@ class PosController extends Controller
             if (array_key_exists('is_nc', $data)) {
                 $till->setNoCharge($row, (bool) $data['is_nc']);
             }
-
-            /*
-             * The − and + buttons post a step rather than a quantity. Three
-             * controls all called `qty` in one form is a trap: the browser
-             * sends the button's value AND the box's, and PHP keeps the last
-             * one — so the minus button did nothing at all.
-             */
             if (isset($data['step'])) {
                 $till->setQty($row, (float) $row->qty + (int) $data['step'], $userId);
             } elseif (isset($data['qty'])) {
@@ -258,7 +243,6 @@ class PosController extends Controller
         }, $request, $posOrder, 'Order updated.');
     }
 
-    /** DELETE point-of-sale/pos/order/{order}/item/{line} */
     public function removeItem(Request $request, int $order, int $line): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -278,18 +262,10 @@ class PosController extends Controller
         );
     }
 
-    /** PUT point-of-sale/pos/order/{order} — steward, covers, discount, remark. */
     public function header(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
         $posOrder = $this->find($order, $branchId);
-
-        /*
-         * Every id is checked against the branch, not just against being a
-         * number. Without it another property's steward could be posted
-         * straight onto this bill — the dropdown is built correctly, but a
-         * dropdown is not a permission check.
-         */
         $data = $request->validate([
             'pos_steward_id' => ['nullable', 'integer', $this->ours('pos_stewards', $branchId)],
             'pos_rate_plan_id' => ['nullable', 'integer', $this->ours('pos_rate_plans', $branchId)],
@@ -300,8 +276,6 @@ class PosController extends Controller
             'pax' => 'nullable|integer|min:1|max:250',
             'discount_percent' => 'nullable|numeric|min:0|max:100',
             'service_charge' => 'nullable|numeric|min:0|max:999999',
-            // No Tax, each item's own, or one tax across the bill. Built from
-            // the live list so a tax added in Masters works straight away.
             'tax_choice' => ['nullable', 'string', Rule::in(array_keys(PosTill::taxChoices($branchId)))],
         ]);
 
@@ -313,7 +287,6 @@ class PosController extends Controller
         );
     }
 
-    /** POST point-of-sale/pos/order/{order}/kot */
     public function kot(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -345,18 +318,6 @@ class PosController extends Controller
         );
     }
 
-    /**
-     * Tell the in-house guest their order has gone to the kitchen.
-     *
-     * Only fires when this order is tied to a room — a room-service order has
-     * that from the moment it opens, and a restaurant table only gets it once
-     * the bill is signed to a room, which usually happens after the kitchen
-     * has already been told. A walk-in eating in the restaurant has no number
-     * on file and gets nothing — the same rule guest.pos-bill already follows
-     * at settle time. This is the same message, just one step earlier, for
-     * the guest who wants to know their order was heard before the bill ever
-     * comes.
-     */
     private function notifyGuestOfKot(PosOrder $posOrder, int $kotNumber, int $branchId): void
     {
         $fresh = $posOrder->fresh();
@@ -389,7 +350,6 @@ class PosController extends Controller
         ], $branchId);
     }
 
-    /** POST point-of-sale/pos/order/{order}/bill */
     public function bill(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -413,7 +373,6 @@ class PosController extends Controller
             ->with('print', route('point-of-sale.pos.order.print', $posOrder->id));
     }
 
-    /** POST point-of-sale/pos/order/{order}/settle */
     public function settle(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -440,8 +399,6 @@ class PosController extends Controller
 
                 $reason = PosNcType::query()->forBranch($branchId)->findOrFail($request->integer('nc_type_id'));
 
-                // "Whose budget" is enforced here as well as in the browser —
-                // the whole point of the flag is that somebody carries the cost.
                 if ($reason->requires_department && ! $request->integer('nc_department_id')) {
                     return back()->with('error', "\"{$reason->name}\" has to name the department that carries it.");
                 }
@@ -470,22 +427,27 @@ class PosController extends Controller
 
         $fresh = $posOrder->refresh();
 
-        /*
-         * A till order has a guest name but no phone number of its own — the
-         * only one the system knows belongs to the stay the order was signed
-         * to. So a walk-in eating in the restaurant gets nothing, which is
-         * right: we do not have their number and should not invent one.
-         */
         $stay = $fresh->check_in_id
             ? CheckIn::query()->where('branch_id', $branchId)->find($fresh->check_in_id)
             : null;
 
         if ($stay) {
+            $items = PosOrderItem::query()
+                ->where('pos_order_id', $fresh->id)
+                ->with('menuItem')
+                ->get();
+
             GuestMessage::send('guest.pos-bill', $stay->mobile, [
                 'guest' => $stay->guest_name,
                 'guest_email' => $stay->reservation?->email,
+                'guest_phone' => $stay->mobile,
+                'room' => $stay->room?->room_no,
                 'outlet' => $fresh->outlet?->name,
-                'invoice_no' => $fresh->invoice()->value('invoice_no') ?: $fresh->order_no,
+                'bill_no' => $fresh->invoice()->value('invoice_no') ?: $fresh->order_no,
+                'items' => $items->isNotEmpty()
+                    ? $items->map(fn (PosOrderItem $i) => rtrim(rtrim(number_format((float) $i->qty, 2), '0'), '.')
+                        . '× ' . ($i->menuItem?->name ?? 'Item'))->implode(', ')
+                    : null,
                 'amount' => '₹ ' . number_format((float) $fresh->net_amount, 2),
             ], $branchId);
         }
@@ -495,9 +457,6 @@ class PosController extends Controller
             ->body(trim(($fresh->outlet?->name ?? '') . ' · ' . $done))
             ->url(route('point-of-sale.pos.invoices'))
             ->send();
-
-        // A settled table is finished with — send the cashier back to the floor
-        // rather than leaving them looking at a bill they can no longer change.
         return $fresh->isSettled()
             ? redirect()->route('point-of-sale.pos', ['outlet' => $fresh->outlet_id])
                 ->with('status', $done)
@@ -505,7 +464,6 @@ class PosController extends Controller
             : redirect()->route('point-of-sale.pos.order', $fresh->id)->with('status', $done);
     }
 
-    /** POST point-of-sale/pos/order/{order}/shift */
     public function shift(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -522,7 +480,6 @@ class PosController extends Controller
         return back()->with('status', "Moved to {$target->name}.");
     }
 
-    /** POST point-of-sale/pos/order/{order}/cancel */
     public function cancel(Request $request, int $order): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -547,13 +504,6 @@ class PosController extends Controller
             ->with('status', "Order {$posOrder->order_no} cancelled.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Paper
-    |--------------------------------------------------------------------------
-    */
-
-    /** GET point-of-sale/pos/order/{order}/print */
     public function printBill(int $order): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -568,7 +518,6 @@ class PosController extends Controller
         ]);
     }
 
-    /** GET point-of-sale/pos/order/{order}/kot/{number} */
     public function printKot(int $order, int $number): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -586,13 +535,6 @@ class PosController extends Controller
         ]);
     }
 
-    /**
-     * GET point-of-sale/pos/table/{table}/card
-     *
-     * The card that sits on the table. A guest scans it, the ordering page
-     * opens on their phone already knowing which table they are at, and the
-     * waiter never has to be flagged down to start an order.
-     */
     public function tableCard(int $table): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -600,9 +542,6 @@ class PosController extends Controller
         $seat = PosTable::query()->forBranch($branchId)->with(['group', 'outlet'])->findOrFail($table);
         $code = $this->tableCode($seat);
 
-        // The guest's own page — no login, no session, exactly like the
-        // feedback link. GuestOrderController checks this same code before
-        // it shows a single item.
         $url = route('guest-order.menu', ['table' => $seat->id, 'code' => $code]);
 
         return view('pos.till.table-card', [
@@ -613,16 +552,6 @@ class PosController extends Controller
         ]);
     }
 
-    /**
-     * GET point-of-sale/pos/scan/{table}
-     *
-     * A second, older use of the same code: a member of staff, signed in on
-     * their own phone, scanning or tapping through to a table's order screen
-     * instead of hunting for it on the floor plan. Left exactly as it was —
-     * the table card itself no longer points here (see tableCard() above),
-     * but nothing stops a staff member reaching this URL directly, and it
-     * still checks the code before it opens anybody's bill.
-     */
     public function scan(Request $request, int $table): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -635,32 +564,10 @@ class PosController extends Controller
         return $this->openTable($request, $table);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * A short code that belongs to one table on one installation.
-     *
-     * The formula itself lives on the model now — PosTable::code() — because
-     * the public guest menu (GuestOrderController) has to check the very same
-     * code and two copies of a security-relevant formula is how they quietly
-     * drift apart. Kept here as a thin wrapper so every existing call site in
-     * this controller reads unchanged.
-     */
     private function tableCode(PosTable $table): string
     {
         return $table->code();
     }
-
-    /**
-     * A rule that the id names a live row this branch may use.
-     *
-     * Matches BaseMaster's own `forBranch` scope — a NULL branch_id row is
-     * shared by every branch — so the validator and the dropdowns agree.
-     */
     private function ours(string $table, int $branchId): \Illuminate\Validation\Rules\Exists
     {
         return Rule::exists($table, 'id')->where(
@@ -669,7 +576,6 @@ class PosController extends Controller
         );
     }
 
-    /** The order, or a 404 — never another branch's. */
     private function find(int $id, int $branchId): PosOrder
     {
         return PosOrder::query()
@@ -678,16 +584,12 @@ class PosController extends Controller
             ->findOrFail($id);
     }
 
-    /** A line that is really on this order. */
     private function line(PosOrder $order, int $id): PosOrderItem
     {
         return $order->items()->whereKey($id)->firstOrFail();
     }
 
     /**
-     * Run a till action, turn a refusal into a message rather than a stack
-     * trace, and come back to the bill.
-     *
      * @param  string|callable(): string  $done
      */
     private function act(callable $work, Request $request, PosOrder $order, $done): RedirectResponse
@@ -702,13 +604,6 @@ class PosController extends Controller
     }
 
     /**
-     * The outlets this user may bill through.
-     *
-     * Public and static because it is a permission decision, and every screen
-     * that offers an outlet picker has to make the same one. A restricted
-     * cashier who can see the Bar in a dropdown can read the Bar's takings by
-     * changing a number in the URL, so there is exactly one list.
-     *
      * @return \Illuminate\Support\Collection<int, Outlet>
      */
     public static function outlets(int $branchId)
@@ -721,23 +616,12 @@ class PosController extends Controller
             ->with('users')
             ->orderBy('name')
             ->get()
-            // An outlet with nobody named on it is open to everybody; one with
-            // a list is open only to that list.
             ->filter(fn (Outlet $outlet) => $outlet->users->isEmpty()
                 || is_admin()
                 || $outlet->users->contains('user_id', $user?->user_id))
             ->values();
     }
 
-    /**
-     * Which outlet the screen is on.
-     *
-     * The picker at the top is a single dropdown holding both the outlet and
-     * what it is showing — "Coffee Shop → Tables", "Coffee Shop → Rooms" — so
-     * one choice answers both questions the way the old system did. It posts
-     * `view` as `<outlet>|<mode>`; the plain `outlet` parameter still works,
-     * because every link elsewhere in the app carries just that.
-     */
     private function pickOutlet(Request $request, $outlets): ?Outlet
     {
         $wanted = $this->viewParts($request)[0] ?: $request->integer('outlet');
@@ -773,18 +657,11 @@ class PosController extends Controller
         return $outlet;
     }
 
-    /** Order types this outlet takes that do not need a seat. */
     private function counterTypes(Outlet $outlet): array
     {
         return array_values(array_intersect($outlet->orderTypes(), ['take_away', 'delivery']));
     }
 
-    /**
-     * The menu, as headings with their sub-headings.
-     *
-     * Categories are shown one at a time on the billing screen, so what this
-     * has to return is the list of buttons — not the items themselves.
-     */
     private function menuTree(int $branchId, ?int $outletId)
     {
         return PosMenuCategory::query()
@@ -797,7 +674,6 @@ class PosController extends Controller
             ->groupBy(fn (PosMenuCategory $row) => $row->type === 'category' ? 'headings' : 'subs');
     }
 
-    /** The items to show: one category, a search, or everything. */
     private function menuItems(int $branchId, PosOrder $order, ?int $category, string $term)
     {
         return PosMenuItem::query()
@@ -809,8 +685,6 @@ class PosController extends Controller
                 'modifierGroups.modifiers' => fn ($q) => $q->active(),
             ])
             ->when($category, function ($q) use ($category) {
-                // A heading shows everything filed under it as well as its own
-                // items, so tapping Beverages does not hide the hot drinks.
                 $q->where(function ($inner) use ($category) {
                     $inner->where('pos_menu_category_id', $category)
                         ->orWhereIn(
@@ -838,12 +712,6 @@ class PosController extends Controller
     }
 
     /**
-     * The price lists this outlet runs, as id => name.
-     *
-     * Read as models and mapped rather than plucked: both tables in the join
-     * have a column called `name`, and plucking one of them by an unqualified
-     * name is how a Happy Hours dropdown quietly fills up with outlet names.
-     *
      * @return \Illuminate\Support\Collection<int, string>
      */
     private function ratePlansFor(PosOrder $order)
@@ -860,7 +728,6 @@ class PosController extends Controller
             ->mapWithKeys(fn ($plan) => [$plan->id => $plan->name]);
     }
 
-    /** Tables this order could move to — free ones in the same outlet. */
     private function shiftTargets(int $branchId, PosOrder $order)
     {
         $busy = PosOrder::query()
@@ -881,12 +748,6 @@ class PosController extends Controller
     }
 
     /**
-     * The row of screens across the top of the till.
-     *
-     * Built here rather than in the view because the same strip is drawn on
-     * eight different screens, and a link that exists on seven of them is
-     * worse than one that exists on none.
-     *
      * @return list<array{label: string, route: string, icon: string, key: string}>
      */
     public static function nav(?Outlet $outlet): array

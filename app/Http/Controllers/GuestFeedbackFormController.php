@@ -7,27 +7,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The form the guest fills in, from a link on their phone.
- *
- * Deliberately outside every middleware group — there is no account, no
- * session and no cookie. The forty random characters in the link are what
- * stands in for a login: nothing to guess and nothing to count up through,
- * exactly like the document links.
- *
- * ── What this screen does NOT do ──────────────────────────────────────────
- *
- * It does not ask for a name, an email or a phone number. The hotel already
- * knows all three — the token says which stay this is — and a form that opens
- * by asking a guest to identify themselves is a form that gets closed.
- *
- * Every score is optional. Somebody who rates the room and skips the food has
- * told the hotel something useful, and a form that insists on all five gets
- * answered by nobody.
- */
 class GuestFeedbackFormController extends Controller
 {
-    /** GET feedback/{token} */
     public function show(string $token): View
     {
         $feedback = GuestFeedback::query()
@@ -45,16 +26,10 @@ class GuestFeedbackFormController extends Controller
         ]);
     }
 
-    /** POST feedback/{token} */
     public function store(Request $request, string $token)
     {
         $feedback = GuestFeedback::where('token', $token)->firstOrFail();
 
-        /*
-         * A second submission is not an error and not an overwrite. A guest
-         * who taps the link again should see their answer, not a form that
-         * quietly replaces what they already said.
-         */
         if ($feedback->isAnswered()) {
             return redirect()->route('guest-feedback', $token);
         }
@@ -73,8 +48,6 @@ class GuestFeedbackFormController extends Controller
             'would_return' => ['nullable', Rule::in(['1', '0'])],
         ]);
 
-        // Nothing at all answered is not an answer. Send them back rather than
-        // recording a row of nulls as feedback.
         $said = collect($data)->filter(fn ($v) => $v !== null && $v !== '')->isNotEmpty();
 
         if (! $said) {

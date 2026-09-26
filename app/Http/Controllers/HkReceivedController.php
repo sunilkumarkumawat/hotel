@@ -14,21 +14,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
-/**
- * Received — the linen coming back from the laundry.
- *
- * This is the other half of Issue, and the half that makes Prev Qty mean
- * anything: until something is received, the vendor goes on owing everything
- * that was ever sent.
- *
- * A receipt is written against a **vendor**, not against one issue note. A
- * laundry with four notes open sends back one van with a mix of all four, and
- * making the clerk split that van across four documents is exactly how counts
- * stop matching. The receipt settles the vendor's running balance per item.
- */
+
 class HkReceivedController extends Controller
 {
-    /** GET house-keeping/received */
     public function index(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
@@ -59,7 +47,6 @@ class HkReceivedController extends Controller
             'receipts' => $receipts,
             'filters' => $filters,
             'vendors' => $this->vendors($branchId),
-            // The whole point of the screen, on the screen: what is still out.
             'outstanding' => $outstanding
                 ->mapWithKeys(fn ($qty, $id) => [$id => [
                     'name' => $items[$id]->name ?? 'Item #' . $id,
@@ -78,16 +65,10 @@ class HkReceivedController extends Controller
         ]);
     }
 
-    /** GET house-keeping/received/new */
     public function create(Request $request): View
     {
         $branchId = Helper::getActiveBranchId();
 
-        /*
-         * `old` first: a failed save redirects back here with no query string,
-         * and reading only the URL would hand the clerk an empty grid under an
-         * error message about a line they can no longer see.
-         */
         $vendorId = (int) old('vendor_id', $request->integer('vendor')) ?: null;
 
         return view('house-keeping.received-form', [
@@ -99,12 +80,6 @@ class HkReceivedController extends Controller
         ]);
     }
 
-    /**
-     * GET house-keeping/received/pending?vendor=<id>
-     *
-     * The rows for the picked vendor, so choosing one fills the grid without
-     * a page reload — and so the clerk never types an item that is not out.
-     */
     public function pending(Request $request): JsonResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -114,7 +89,6 @@ class HkReceivedController extends Controller
         ]);
     }
 
-    /** POST house-keeping/received */
     public function store(Request $request): RedirectResponse
     {
         $branchId = Helper::getActiveBranchId();
@@ -152,9 +126,6 @@ class HkReceivedController extends Controller
         if ($lines === []) {
             return back()->withInput()->with('error', 'Every line is zero — enter what actually came back.');
         }
-
-        // Same race as the issue note: (branch_id, receipt_no) is unique, so a
-        // clerk who loses it simply takes the next number instead of a 500.
         $receipt = retry(3, fn () => DB::transaction(function () use ($branchId, $data, $lines, $request) {
             $receipt = HkReceipt::create([
                 'branch_id' => $branchId,
@@ -191,7 +162,6 @@ class HkReceivedController extends Controller
             ));
     }
 
-    /** GET house-keeping/received/{receipt} */
     public function show(HkReceipt $receipt): View
     {
         abort_unless($receipt->branch_id === Helper::getActiveBranchId(), 404);
@@ -201,7 +171,6 @@ class HkReceivedController extends Controller
         return view('house-keeping.received-show', ['receipt' => $receipt]);
     }
 
-    /** DELETE house-keeping/received/{receipt} */
     public function destroy(HkReceipt $receipt): RedirectResponse
     {
         abort_unless($receipt->branch_id === Helper::getActiveBranchId(), 404);
@@ -216,15 +185,7 @@ class HkReceivedController extends Controller
         return back()->with('status', "{$number} deleted. Those pieces are back on the vendor's list.");
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /**
-     * One row per item this vendor is still holding.
-     *
      * @return array<int, array<string, mixed>>
      */
     private function pendingLines(int $branchId, ?int $vendorId): array
@@ -248,12 +209,6 @@ class HkReceivedController extends Controller
     }
 
     /**
-     * Keep the lines that say something, and refuse anything over the balance.
-     *
-     * Nothing the browser sends is trusted: the pending figure is read again
-     * here, so a tampered form cannot receive back more than went out and turn
-     * the vendor's balance into a credit.
-     *
      * @return array{0: list<array<string, mixed>>, 1: list<string>}
      */
     private function cleanLines(array $rows, $pending, int $branchId): array
@@ -280,7 +235,6 @@ class HkReceivedController extends Controller
                 continue;
             }
 
-            // The same item twice on one note is one total, not two lines.
             if (isset($seen[$itemId])) {
                 $at = $seen[$itemId];
                 $out[$at]['received_qty'] += $received;
@@ -311,8 +265,6 @@ class HkReceivedController extends Controller
             ];
         }
 
-        // A line that tipped over the balance while being merged must not be
-        // saved at all, or half of it would go in and the message would lie.
         if ($over !== []) {
             return [[], array_values($over)];
         }

@@ -60,11 +60,14 @@
                         </x-field>
 
                         <x-field label="Name" name="guest_name">
-                            <x-input name="guest_name" data-guest-name />
+                            {{-- :value picks up ?guest_name= when Quick Actions sends someone
+                                 here for a named guest; a plain visit leaves it null exactly
+                                 as before. --}}
+                            <x-input name="guest_name" data-guest-name :value="request('guest_name')" />
                         </x-field>
 
                         <x-field label="Mobile" name="mobile">
-                            <x-input name="mobile" data-guest-mobile />
+                            <x-input name="mobile" data-guest-mobile :value="request('mobile')" />
                         </x-field>
 
                         <x-field label="Room" name="room_no">

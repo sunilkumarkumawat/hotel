@@ -16,24 +16,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The housekeeping board — the house as work, not as a list.
- *
- * Two views of the same data, and they answer two different questions:
- *
- *   **Room View** groups every room under its type, which is how a supervisor
- *   allots: "do the four suites first, they check in at two."
- *
- *   **Pipeline** is the four columns work actually moves through — Occupied,
- *   Dirty, Cleaning, Ready — and it is where a room gets moved along.
- *
- * Every move is written to `housekeeping_logs` as well as to the room. The log
- * is what makes "who marked 312 clean at four in the afternoon when the guest
- * says it never was" a question with an answer.
- */
+
 class HousekeepingBoardController extends Controller
 {
-    /** GET house-keeping/board */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -69,15 +54,6 @@ class HousekeepingBoardController extends Controller
                 ->get(),
         ]);
     }
-
-    /**
-     * POST house-keeping/board/move
-     *
-     * One room, one new stage. Answers JSON to the board's drag handler and a
-     * redirect to the buttons, so the screen works with the script switched off
-     * — a housekeeping terminal is exactly the machine whose browser is eight
-     * years old.
-     */
     public function move(Request $request): RedirectResponse|JsonResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -87,8 +63,6 @@ class HousekeepingBoardController extends Controller
             'to' => ['required', Rule::in(array_keys(HousekeepingBoard::MOVES))],
             'housekeeper_id' => 'nullable|integer',
             'remark' => 'nullable|string|max:255',
-            // Present only when the move came from a drag, and only so the
-            // server can check the same rule the browser just checked.
             'from' => 'nullable|string|max:20',
         ]);
 
@@ -98,12 +72,6 @@ class HousekeepingBoardController extends Controller
             return $this->answer($request, false, 'That room is not one of this branch\'s.');
         }
 
-        /*
-         * A room out of service is held by a block with a reason and dates.
-         * Housekeeping marking it clean would put it back on sale behind the
-         * back of every calendar in the app, so the move is refused and the
-         * clerk is told where to go instead.
-         */
         if ($room->housekeeping_status === 'out_of_order') {
             return $this->answer($request, false, sprintf(
                 'Room %s is out of order — release it from House Keeping → Room Blocked before changing its status.',
@@ -127,10 +95,6 @@ class HousekeepingBoardController extends Controller
                 'housekeeping_status' => $move['status'],
                 'housekeeping_remark' => $data['remark'] ?? $room->housekeeping_remark,
                 'housekeeper_id' => $data['housekeeper_id'] ?: $room->housekeeper_id,
-                // The clock the board's "since" label counts from. It starts
-                // when cleaning starts and is cleared the moment it stops, so
-                // a room that has been "being cleaned for 6 hours" is visible
-                // rather than merely true.
                 'cleaning_started_at' => $move['status'] === 'cleaning' ? now() : null,
             ]);
 
@@ -145,8 +109,6 @@ class HousekeepingBoardController extends Controller
             ]);
         });
 
-        // A room becoming sellable is news the front desk wants; the other
-        // three moves are housekeeping talking to itself.
         Notify::event($data['to'] === 'ready' ? 'housekeeping.ready' : 'housekeeping.status')
             ->title('Room ' . $room->room_no . ' — ' . strtolower($move['label']))
             ->body(trim(($room->type?->name ?? '') . ' · ' . ($room->housekeeper?->name ?? 'nobody assigned')))
@@ -155,13 +117,6 @@ class HousekeepingBoardController extends Controller
 
         return $this->answer($request, true, sprintf('Room %s — %s.', $room->room_no, strtolower($move['label'])));
     }
-
-    /**
-     * POST house-keeping/board/assign
-     *
-     * Give a housekeeper a column's worth of rooms in one go — the per-column
-     * action on the Pipeline board.
-     */
     public function assign(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -200,30 +155,12 @@ class HousekeepingBoardController extends Controller
             $rooms->pluck('room_no')->implode(', ')
         ));
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
-    /**
-     * Why this move is not allowed — or null when it is.
-     *
-     * The drag rules are checked here and not only in the browser. A rule that
-     * lives only in JavaScript is a rule that a stale tab, a double-tap or a
-     * curl command does not have to obey, and the one that matters here is
-     * "cleaning cannot be dragged": without it a room in the middle of being
-     * made up could be flicked to Ready by a sleeve on a touchscreen.
-     */
     private function refuse(string $stage, array $data): ?string
     {
         if ($stage === 'blocked') {
             return 'That room is out of order and is not on the board.';
         }
 
-        // Only a drag carries `from`; the buttons do not, and the buttons are
-        // allowed the moves a drag is not.
         if (blank($data['from'] ?? null)) {
             return null;
         }
@@ -252,7 +189,6 @@ class HousekeepingBoardController extends Controller
         return null;
     }
 
-    /** Same answer, in whichever shape the caller can read. */
     private function answer(Request $request, bool $ok, string $message): RedirectResponse|JsonResponse
     {
         if ($request->expectsJson()) {
@@ -261,14 +197,6 @@ class HousekeepingBoardController extends Controller
 
         return back()->with($ok ? 'status' : 'error', $message);
     }
-
-    /**
-     * Who can be given rooms.
-     *
-     * Everybody active in the branch: a small hotel's manager cleans rooms too,
-     * and a "housekeeper" role the customer never set up would leave this list
-     * empty with no way to tell why.
-     */
     private function housekeepers(int $branchId)
     {
         return User::query()

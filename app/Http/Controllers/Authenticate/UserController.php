@@ -137,12 +137,6 @@ class UserController extends Controller
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Self-service profile
-    |--------------------------------------------------------------------------
-    */
-
     public function userProfile(Request $request): View
     {
         return view('users.profile', ['user' => $request->user()->load(['role', 'branch'])]);
@@ -168,12 +162,6 @@ class UserController extends Controller
 
         return back()->with('status', 'Your profile has been updated.');
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
 
     /** @return array<string, mixed> */
     private function formData(User $user): array
@@ -203,8 +191,7 @@ class UserController extends Controller
                 Rule::unique('users', 'username')->ignore($user?->user_id, 'user_id'),
             ],
             'mobile' => ['required', 'string', 'max:20'],
-            // Where notifications reach this person, and whether they want
-            // them. Both optional — a user with neither simply gets the bell.
+
             'email' => ['nullable', 'email', 'max:150'],
             'whatsapp_no' => ['nullable', 'string', 'max:20'],
             'notify_web' => ['nullable', 'boolean'],
@@ -220,10 +207,6 @@ class UserController extends Controller
         ]);
     }
 
-    /**
-     * Write the permission matrix into `user_permission` — one row per
-     * (user, branch), holding the id lists and the JSON action map.
-     */
     private function syncPermissions(User $user, Request $request): void
     {
         /** @var array<string, array<string, string>> $matrix */
@@ -246,7 +229,6 @@ class UserController extends Controller
                 'delete' => isset($actions['delete']) ? 1 : 0,
             ];
 
-            // Anything granted implies "view" — the sidebar needs it.
             if (array_sum($row) === 0) {
                 continue;
             }

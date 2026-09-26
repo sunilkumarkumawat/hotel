@@ -18,21 +18,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The car park.
- *
- * **Parking is free.** The hotel said so and the code says so: `is_chargeable`
- * starts off, a record with it off costs the guest nothing whatever sits in the
- * rate, and turning it on is a deliberate tick on the screen. Nothing in this
- * controller reaches for a rate the clerk did not ask for.
- *
- * A car is taken in when it arrives and taken out when it leaves, and the
- * charge — if there is one — is worked out **on the way out**, because that is
- * the first moment anybody knows how long it was there.
- */
 class ParkingController extends Controller
 {
-    /** GET car/parking */
+
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -51,11 +39,6 @@ class ParkingController extends Controller
         $rows = ParkingRecord::query()
             ->forBranch($branchId)
             ->with(['slot', 'stay.room'])
-            /*
-             * A car still in the park belongs on the screen whenever it arrived
-             * — a van left on Friday is exactly what the Monday clerk needs to
-             * see, and filtering it out by date is how it gets forgotten.
-             */
             ->when(
                 $filters['status'] !== 'parked',
                 fn ($q) => $q
@@ -99,7 +82,6 @@ class ParkingController extends Controller
         ]);
     }
 
-    /** POST car/parking — a car arrives. */
     public function checkIn(Request $request): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -122,12 +104,7 @@ class ParkingController extends Controller
 
         $plate = strtoupper(preg_replace('/\s+/', '', $data['vehicle_no']) ?: '');
 
-        // The same car cannot be in the park twice. Somebody re-typing a ticket
-        // is far more likely than a second car with the same plate.
         $already = ParkingRecord::query()->forBranch($branchId)->parked()
-            // Single quotes inside the SQL on purpose: MySQL in ANSI mode and
-            // SQLite both read a double-quoted string as a column name, and the
-            // check would then compare the plate against itself and never match.
             ->whereRaw("UPPER(REPLACE(vehicle_no, ' ', '')) = ?", [$plate])
             ->first();
 
@@ -177,11 +154,6 @@ class ParkingController extends Controller
                 'driver_name' => $data['driver_name'] ?? null,
                 'driver_mobile' => $data['driver_mobile'] ?? null,
                 'in_at' => $data['in_at'] ? CarbonImmutable::parse($data['in_at']) : now(),
-                /*
-                 * Free on arrival, always. Whether this car ends up costing
-                 * anything is decided on the way out, by a tick somebody has to
-                 * make on purpose.
-                 */
                 'is_chargeable' => 0,
                 'rate' => 0,
                 'status' => 'parked',
@@ -208,7 +180,6 @@ class ParkingController extends Controller
         return back()->with('status', $record->vehicle_no . ' parked on ticket ' . $record->ticket_no . '. No charge.');
     }
 
-    /** POST car/parking/{record}/out — a car leaves, and only now might it cost something. */
     public function checkOut(Request $request, int $record): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -235,12 +206,6 @@ class ParkingController extends Controller
 
         $hours = Facility::hoursBetween((string) $row->in_at, $out->toDateTimeString());
 
-        /*
-         * The tick, and only the tick. A record with it off is worth nothing
-         * however many hours it sat there and whatever number is in the rate
-         * box — which is the hotel's rule, written where it cannot be argued
-         * with.
-         */
         $chargeable = (bool) ($data['is_chargeable'] ?? false);
         $rate = $chargeable ? round((float) ($data['rate'] ?? 0), 2) : 0.0;
         $gross = $chargeable ? round($hours * $rate, 2) : 0.0;
@@ -296,7 +261,6 @@ class ParkingController extends Controller
             ->with($warning ? 'warning' : 'ignored', $warning);
     }
 
-    /** POST car/parking/{record}/cancel — the ticket was a mistake. */
     public function cancel(int $record): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();

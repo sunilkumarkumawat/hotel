@@ -254,21 +254,43 @@ class HotelDashboard
     {
         $next = CarbonImmutable::parse($this->date)->addDay()->toDateString();
 
+        $arrivals = DB::table('reservation_rooms as rr')
+            ->join('reservations as r', 'r.id', '=', 'rr.reservation_id')
+            ->leftJoin('rooms as ro', 'ro.id', '=', 'rr.room_id')
+            ->where('r.branch_id', $this->branchId)
+            ->whereIn('r.status', ['confirmed', 'tentative'])
+            ->where('rr.arrival_date', '>=', $this->date)
+            ->where('rr.arrival_date', '<', $next)
+            ->orderBy('r.reservation_no')
+            ->limit(12)
+            ->get([
+                'rr.id as rr_id', 'r.id as reservation_id', 'r.reservation_no', 'r.title',
+                'r.first_name', 'r.last_name', 'r.mobile',
+                'ro.room_no', 'rr.arrival_date', 'rr.checkout_date',
+            ]);
+
+        // A multi-room booking row never gets rr.room_id filled in — see the
+        // comment in CheckInController::store() — so a booking still on this
+        // widget because some of its rooms haven't arrived yet reads as
+        // unallotted even when the guests who did arrive already have a
+        // real room each. Same bulk-lookup shape Reports::reportArrivals()
+        // uses for the identical case.
+        $checkedInRooms = DB::table('check_ins as ci')
+            ->join('rooms as cr', 'cr.id', '=', 'ci.room_id')
+            ->whereIn('ci.reservation_room_id', $arrivals->pluck('rr_id'))
+            ->orderBy('cr.room_no')
+            ->get(['ci.reservation_room_id', 'cr.room_no'])
+            ->groupBy('reservation_room_id')
+            ->map(fn ($g) => $g->pluck('room_no')->unique()->implode(', '));
+
+        $arrivals = $arrivals->map(function ($row) use ($checkedInRooms) {
+            $row->room_no = ($checkedInRooms[$row->rr_id] ?? $row->room_no) ?: null;
+
+            return $row;
+        });
+
         return [
-            'arrivals' => collect(DB::table('reservation_rooms as rr')
-                ->join('reservations as r', 'r.id', '=', 'rr.reservation_id')
-                ->leftJoin('rooms as ro', 'ro.id', '=', 'rr.room_id')
-                ->where('r.branch_id', $this->branchId)
-                ->whereIn('r.status', ['confirmed', 'tentative'])
-                ->where('rr.arrival_date', '>=', $this->date)
-                ->where('rr.arrival_date', '<', $next)
-                ->orderBy('r.reservation_no')
-                ->limit(12)
-                ->get([
-                    'r.id as reservation_id', 'r.reservation_no', 'r.title',
-                    'r.first_name', 'r.last_name', 'r.mobile',
-                    'ro.room_no', 'rr.arrival_date', 'rr.checkout_date',
-                ])),
+            'arrivals' => $arrivals,
 
             'departures' => collect(DB::table('check_ins as ci')
                 ->leftJoin('rooms as ro', 'ro.id', '=', 'ci.room_id')

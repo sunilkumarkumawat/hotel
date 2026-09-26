@@ -7,55 +7,18 @@ use App\Http\Controllers\Controller;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * The shared engine behind the small Setup lists.
- *
- * Item Category, Rate Plan, Department, Stewards and NC Types are the same
- * screen wearing five sets of column headings: a table you type straight into,
- * a row at the top for a new entry, and Edit turning a row into inputs where it
- * already sits.
- *
- * That editing is done by the server, not by JavaScript. `?edit=7` re-renders
- * row 7 as inputs, Update posts it, Cancel is a link back. It costs one page
- * load per edit and buys a screen that works with scripts blocked, keeps the
- * browser's Back button honest, and shows validation errors on the exact row
- * they belong to.
- *
- * A subclass supplies `definition()` and nothing else unless it has to — Rate
- * Plan overrides `afterSave()` to write its outlets, Item Category overrides
- * `extraRules()` to insist a sub-category names a parent.
- */
 abstract class SetupListController extends Controller
 {
-    /**
-     * Field types that are not columns on the model.
-     *
-     * They are validated like anything else, then lifted out of the data before
-     * it reaches the row — a subclass writes them in `afterSave()`, once the row
-     * has an id to hang a relation off.
-     */
-    private const PSEUDO_TYPES = ['checkboxes', 'prices'];
 
-    /**
-     * Field types somebody has to type something into.
-     *
-     * Used to tell an untouched blank row from one being filled in. A select
-     * cannot be part of that test: it posts its first option whether or not
-     * anybody looked at it, so a row of nothing but selects would count as
-     * typed in and then fail validation for having no name.
-     */
+    private const PSEUDO_TYPES = ['checkboxes', 'prices'];
     private const TYPED_TYPES = ['text', 'money', 'number', 'textarea'];
 
     /**
-     * What this list is and what it holds.
-     *
-     * Keys: model, route, permission, label, plural, icon, intro, fields, and
-     * optionally order, with, empty.
-     *
      * @return array<string, mixed>
      */
     abstract protected function definition(): array;
@@ -110,18 +73,6 @@ abstract class SetupListController extends Controller
             ->with('status', "{$def['label']} \"{$row->name}\" has been added.");
     }
 
-    /**
-     * Several rows in one save.
-     *
-     * Typing a menu in one item at a time means a page load between every
-     * dosa, and a hundred-line menu is a hundred page loads. This takes as many
-     * rows as are on screen, ignores the ones nobody touched, and either saves
-     * them all or saves none — a batch that half-worked would leave somebody
-     * guessing which half.
-     *
-     * Only lists whose definition says `bulk` have this; the others keep the
-     * one-row-at-a-time screen, which is right for a list of six departments.
-     */
     public function storeMany(Request $request): RedirectResponse
     {
         $def = $this->definition();
@@ -131,7 +82,9 @@ abstract class SetupListController extends Controller
         $filled = [];
 
         foreach ((array) $request->input('rows', []) as $index => $row) {
-            if (is_array($row) && $this->typedIn($row)) {
+            $hasPhoto = $request->hasFile('rows.' . $index . '.photo');
+
+            if (is_array($row) && ($this->typedIn($row) || $hasPhoto)) {
                 $filled[$index] = $row;
             }
         }
@@ -148,22 +101,12 @@ abstract class SetupListController extends Controller
         foreach (array_keys($filled) as $index) {
             foreach ($this->rules(null) as $field => $rule) {
                 $rules['rows.' . $index . '.' . $field] = $rule;
-
-                // "rows.0.pos_menu_category_id is required" is not a sentence
-                // anybody can act on. "Row 1 category" is.
                 $labels['rows.' . $index . '.' . $field] =
                     'row ' . ((int) $index + 1) . ' ' . strtolower($def['fields'][$field]['label'] ?? $field);
             }
         }
 
         $validator = Validator::make($request->all(), $rules, [], $labels);
-
-        /*
-         * Two new rows calling themselves the same thing pass every rule above
-         * — each one is unique against the table, because neither is in it yet.
-         * They are only in conflict with each other, which nothing but this
-         * can see.
-         */
         $validator->after(function ($validator) use ($filled) {
             $seen = [];
 
@@ -191,11 +134,12 @@ abstract class SetupListController extends Controller
 
         $saved = 0;
 
-        foreach ($filled as $row) {
-            // Each row is handled as if it had been posted on its own, so
-            // beforeSave() and afterSave() — which read the request — work
-            // unchanged whether one row was saved or twenty.
+        foreach ($filled as $index => $row) {
             $only = Request::create($request->fullUrl(), 'POST', $row);
+
+            if ($photo = $request->file('rows.' . $index . '.photo')) {
+                $only->files->set('photo', $photo);
+            }
 
             /** @var Model $record */
             $record = new $def['model']($this->beforeSave($this->fieldValues($only), $only, null));
@@ -259,42 +203,37 @@ abstract class SetupListController extends Controller
 
         return back()->with('status', "{$def['label']} \"{$row->name}\" is back.");
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Hooks — a subclass overrides only what it needs
-    |--------------------------------------------------------------------------
-    */
-
-    /** Rules a subclass wants on top of the ones its fields declare. */
     protected function extraRules(?int $id): array
     {
         return [];
     }
-
-    /** Last look at the data before it reaches the model. */
     protected function beforeSave(array $data, Request $request, ?Model $row): array
     {
         return $data;
     }
-
-    /** Relations to write once the row has an id. */
     protected function afterSave(Model $row, Request $request): void
     {
         //
     }
-
-    /** A sentence naming what still points at this row, or null. */
     protected function inUseBy(Model $row): ?string
     {
         return null;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
+    protected function storePhoto(Model $row, Request $request, string $dir): void
+    {
+        if (! $request->hasFile('photo')) {
+            return;
+        }
+
+        $old = $row->photo;
+        $row->photo = $request->file('photo')->store($dir, 'public');
+        $row->save();
+
+        if ($old && $old !== $row->photo) {
+            Storage::disk('public')->delete($old);
+        }
+    }
 
     /** @return array<string, mixed> */
     private function validated(Request $request, ?int $id): array
@@ -305,12 +244,6 @@ abstract class SetupListController extends Controller
     }
 
     /**
-     * Every rule this list applies to one row, keyed by field name.
-     *
-     * Kept separate from validating so the bulk save can take the same rules
-     * and re-key them under `rows.3.…` — one definition of what a valid row is,
-     * whether it arrives on its own or with nineteen others.
-     *
      * @return array<string, mixed>
      */
     private function rules(?int $id): array
@@ -319,10 +252,11 @@ abstract class SetupListController extends Controller
         $branch = Helper::getActiveBranchId();
         $rules = ['status' => 'nullable|boolean'];
 
+        if ($def['photos'] ?? false) {
+            $rules['photo'] = ['nullable', 'image', 'mimes:png,jpg,jpeg,webp', 'max:2048'];
+        }
+
         foreach ($def['fields'] as $name => $field) {
-            // A pseudo-field like Rate Plan's outlets or an item's plan prices
-            // is stored through a relation, so it never reaches the model's own
-            // columns.
             if (in_array($field['type'] ?? 'text', self::PSEUDO_TYPES, true)) {
                 $rules[$name] = $field['rules'] ?? 'nullable|array';
                 $rules[$name . '.*'] = $field['item_rules'] ?? 'integer';
@@ -333,12 +267,6 @@ abstract class SetupListController extends Controller
             $rules[$name] = $field['rules'] ?? 'nullable|string|max:255';
         }
 
-        /*
-         * No two live rows in a branch may share a name — these lists are
-         * picked from by name and nothing else. A deleted row is allowed to
-         * hold a name that has since been reused, so restoring is never blocked
-         * by something the user cannot see.
-         */
         $name = $rules['name'] ?? 'required|string|max:255';
         $name = is_array($name) ? $name : explode('|', $name);
 
@@ -354,14 +282,6 @@ abstract class SetupListController extends Controller
     }
 
     /**
-     * The row's own columns, read off a request that has already passed.
-     *
-     * Built from the definition rather than from whatever was posted, so a
-     * hand-crafted form cannot smuggle an extra column into a mass assignment.
-     * A field the form did not send at all is left out entirely — that is the
-     * difference between "set this to nothing" and "this was not on screen",
-     * and an update must not wipe a column it never showed.
-     *
      * @return array<string, mixed>
      */
     private function fieldValues(Request $request): array
@@ -375,8 +295,6 @@ abstract class SetupListController extends Controller
                 continue;
             }
 
-            // An unticked box posts nothing at all, so it has to be read as a
-            // decision rather than as an absence.
             if ($type === 'checkbox') {
                 $data[$name] = $request->boolean($name) ? 1 : 0;
 
@@ -389,8 +307,6 @@ abstract class SetupListController extends Controller
 
             $value = $request->input($name);
 
-            // An empty select or an empty money box is "nothing chosen", which
-            // is a NULL — storing '' would make a foreign key of 0.
             $data[$name] = $value === '' ? null : $value;
         }
 
@@ -398,12 +314,6 @@ abstract class SetupListController extends Controller
     }
 
     /**
-     * Has anybody actually typed into this row, or is it a blank one they left?
-     *
-     * Only the fields somebody has to type into count. A select posts its first
-     * option whether or not it was ever looked at, so counting selects would
-     * make every empty row on screen look like an item waiting to be saved.
-     *
      * @param  array<string, mixed>  $row
      */
     private function typedIn(array $row): bool
@@ -412,7 +322,6 @@ abstract class SetupListController extends Controller
             $value = $row[$name] ?? null;
 
             if (is_array($value)) {
-                // A plan price box with a number in it is somebody typing.
                 if (array_filter($value, fn ($each) => $each !== null && $each !== '') !== []) {
                     return true;
                 }
@@ -432,7 +341,6 @@ abstract class SetupListController extends Controller
         return false;
     }
 
-    /** The filters the user was looking at, carried through a save. */
     private function keep(Request $request): array
     {
         return array_filter([

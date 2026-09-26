@@ -54,8 +54,10 @@ class Smtp
             return self::no('Nothing was checked: MAIL_PASSWORD is empty in .env.');
         }
 
-        // 587 is TLS from the first byte; 587 starts in the clear and upgrades.
-        $direct = $port === 587 || in_array((string) config('mail.mailers.smtp.scheme'), ['smtps', 'ssl'], true);
+        // 465 is TLS from the first byte; 587 starts in the clear and upgrades.
+        // Mirrors MailManager::createSmtpTransport()'s own fallback exactly, so
+        // this probe never disagrees with how the real send will connect.
+        $direct = $port === 465 || in_array((string) config('mail.mailers.smtp.scheme'), ['smtps', 'ssl'], true);
         $address = ($direct ? 'ssl://' : 'tcp://') . $host . ':' . $port;
 
         $socket = @stream_socket_client(

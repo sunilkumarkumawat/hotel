@@ -69,6 +69,24 @@ function toggleSidebar() {
     applySidebar(state === 'open' ? '' : 'open');
 }
 
+/* ---------------------------------------------------------- "More" sheet */
+
+// The mobile bottom bar's fifth tab (partials/mobile-nav.blade.php) — the
+// same open/close-by-attribute shape as the sidebar above, just its own
+// attribute so opening one never has to know or care about the other.
+function applyMoreSheet(open) {
+    document.documentElement.toggleAttribute('data-more-open', open);
+
+    const trigger = document.querySelector('[data-toggle="more-sheet"]');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+}
+
+function toggleMoreSheet() {
+    applyMoreSheet(!document.documentElement.hasAttribute('data-more-open'));
+}
+
 /* --------------------------------------------------------------- tooltip */
 
 /*
@@ -248,6 +266,15 @@ function boot() {
         overlay.addEventListener('click', () => applySidebar(''));
     }
 
+    /* "More" sheet (mobile bottom bar) */
+    document.querySelectorAll('[data-toggle="more-sheet"]').forEach((el) => {
+        el.addEventListener('click', toggleMoreSheet);
+    });
+
+    document.querySelectorAll('[data-close="more-sheet"]').forEach((el) => {
+        el.addEventListener('click', () => applyMoreSheet(false));
+    });
+
     /* Collapsed-sidebar hover tooltips */
     initTooltips();
 
@@ -279,6 +306,7 @@ function boot() {
 
         document.querySelectorAll('[data-dropdown].is-open').forEach((o) => o.classList.remove('is-open'));
         if (!isDesktop()) applySidebar('');
+        applyMoreSheet(false);
     });
 
     /* Tabs */

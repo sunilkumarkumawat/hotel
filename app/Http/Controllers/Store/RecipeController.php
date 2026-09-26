@@ -15,19 +15,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * What a dish is made of, and therefore what it costs.
- *
- * The list is really a costing report: every recipe with its cost per portion
- * next to the menu price it is sold at, and the margin between them. That last
- * column is the reason anybody opens this screen.
- *
- * Costs come from the store's moving average, not from the last purchase, so
- * one expensive delivery does not make the menu look unprofitable for a week.
- */
 class RecipeController extends Controller
 {
-    /** GET store/recipes */
     public function index(Request $request): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -44,11 +33,6 @@ class RecipeController extends Controller
                 $recipe->cost = $costing['per_portion'];
                 $recipe->missing = $costing['missing'];
                 $recipe->price = (float) ($recipe->menuItem?->price ?? 0);
-                /*
-                 * Food cost as a percentage of the selling price — the number
-                 * a chef is judged on. Meaningless without a price, so it is
-                 * null rather than zero when the recipe is not tied to one.
-                 */
                 $recipe->food_cost = $recipe->price > 0
                     ? round($recipe->cost / $recipe->price * 100, 1)
                     : null;
@@ -62,7 +46,6 @@ class RecipeController extends Controller
         ]);
     }
 
-    /** GET store/recipes/new  ·  GET store/recipes/{recipe} */
     public function edit(?Recipe $recipe = null): View
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -86,7 +69,6 @@ class RecipeController extends Controller
         ]);
     }
 
-    /** POST store/recipes  ·  PUT store/recipes/{recipe} */
     public function save(Request $request, ?Recipe $recipe = null): RedirectResponse
     {
         $branchId = (int) Helper::getActiveBranchId();
@@ -110,7 +92,6 @@ class RecipeController extends Controller
             'lines.*.remark' => ['nullable', 'string', 'max:255'],
         ]);
 
-        // The same ingredient twice is a typo that quietly doubles a cost.
         $ids = array_column($data['lines'], 'store_item_id');
 
         if (count($ids) !== count(array_unique($ids))) {
@@ -161,7 +142,6 @@ class RecipeController extends Controller
                         . ' a ' . $recipe->yield_unit . '.');
     }
 
-    /** DELETE store/recipes/{recipe} */
     public function destroy(Recipe $recipe): RedirectResponse
     {
         abort_unless((int) $recipe->branch_id === (int) Helper::getActiveBranchId(), 404);

@@ -10,14 +10,6 @@ use Illuminate\Support\Facades\Response;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/**
- * Reservation Calendar Monthly — the position of the house over a long run
- * of dates.
- *
- * Where the other calendars answer "which room, which night", this one
- * answers "how are we doing": arrivals, in-house, departures, blocks and
- * what is still sellable, day by day, with a room-type breakdown underneath.
- */
 class MonthlyCalendarController extends Controller
 {
     private const SPANS = [30 => '30 days', 45 => '45 days', 60 => '60 days'];
@@ -39,7 +31,6 @@ class MonthlyCalendarController extends Controller
         ]);
     }
 
-    /** The same grid as a CSV, for the people who live in Excel. */
     public function export(Request $request): StreamedResponse
     {
         [$start, $days] = $this->window($request);
@@ -84,8 +75,6 @@ class MonthlyCalendarController extends Controller
     }
 
     /**
-     * The date and length asked for, both kept sane.
-     *
      * @return array{0: CarbonImmutable, 1: int}
      */
     private function window(Request $request): array

@@ -4,13 +4,6 @@ namespace App\Http\Controllers\Pos;
 
 use App\Models\Pos\PosDepartment;
 
-/**
- * Department — who cooks it.
- *
- * A KOT for a drink prints at the bar and a KOT for a curry prints in the
- * kitchen, so this list is what routes a ticket. It is also the answer an NC
- * type asks for when a free meal has to land on somebody's cost centre.
- */
 class DepartmentController extends SetupListController
 {
     protected function definition(): array

@@ -11,16 +11,8 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-/**
- * One controller for every master list.
- *
- * The screen at /masters/{master} is built from config/masters.php: what the
- * table shows, what the form asks for and how it validates all come from
- * there, so adding a master never means adding a controller.
- */
 class MasterController extends Controller
 {
-    /** GET /masters — the index of masters. */
     public function home(): View
     {
         $masters = collect(config('masters'))->map(function (array $config, string $key) {
@@ -96,22 +88,12 @@ class MasterController extends Controller
             ->route('masters.index', $master)
             ->with('status', "{$config['label']} \"{$this->title($row, $config)}\" has been added.");
     }
-
-    /**
-     * The grid for typing several at once.
-     *
-     * Every master here is a short list of short rows — twenty rooms, six pay
-     * modes — and the one-at-a-time form makes each of them a page load. This
-     * is the same fields laid out as a table, so a floor of rooms is one save.
-     */
     public function createMany(string $master): View
     {
         $config = $this->config($master);
 
         abort_unless($config['bulk'] ?? true, 404);
 
-        // After a failed save, exactly the rows that came back, so every error
-        // lands on the line it belongs to. Otherwise five empty ones.
         $rows = (array) old('rows', []);
 
         return view('masters.bulk', [
@@ -122,13 +104,6 @@ class MasterController extends Controller
         ]);
     }
 
-    /**
-     * Save the grid — all of it, or none of it.
-     *
-     * A batch that half-worked would leave somebody comparing the screen
-     * against the list to work out which half, so validation runs across every
-     * row before a single one is written.
-     */
     public function storeMany(Request $request, string $master): RedirectResponse
     {
         $config = $this->config($master);
@@ -156,8 +131,6 @@ class MasterController extends Controller
             foreach ($this->rules($config, null, $master) as $column => $rule) {
                 $rules['rows.' . $index . '.' . $column] = $rule;
 
-                // "rows.3.room_no is required" is not a sentence anybody can
-                // act on. "Row 4 room no." is.
                 $labels['rows.' . $index . '.' . $column] =
                     'row ' . ((int) $index + 1) . ' ' . strtolower($config['fields'][$column]['label'] ?? $column);
             }
@@ -165,12 +138,6 @@ class MasterController extends Controller
 
         $validator = Validator::make($request->all(), $rules, [], $labels);
 
-        /*
-         * Two new rows calling themselves the same thing pass every rule above
-         * — each is unique against the table, because neither is in it yet.
-         * They are only in conflict with each other, and nothing else can see
-         * that.
-         */
         $unique = $config['search'] ?? 'name';
 
         $validator->after(function ($validator) use ($filled, $unique) {
@@ -257,7 +224,6 @@ class MasterController extends Controller
         return back()->with('status', "{$config['label']} \"{$name}\" has been deleted.");
     }
 
-    /** Flip the active switch straight from the list. */
     public function toggle(string $master, int $id): RedirectResponse
     {
         $config = $this->config($master);
@@ -268,24 +234,16 @@ class MasterController extends Controller
         return back()->with('status', $row->isActive() ? 'Marked active.' : 'Marked inactive.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     /** @return array<string, mixed> */
     private function config(string $master): array
     {
         return config("masters.{$master}") ?? abort(404, 'No such master.');
     }
 
-    /** Validate against the rules in config, adding a per-branch unique check. */
     private function validated(Request $request, array $config, string $master, ?int $ignore = null): array
     {
         $data = $request->validate($this->rules($config, $ignore, $master), [], $this->attributeNames($config));
 
-        // Unticked switches never reach the request at all.
         foreach ($config['fields'] as $column => $field) {
             if (($field['type'] ?? '') === 'switch') {
                 $data[$column] = $request->boolean($column) ? 1 : 0;
@@ -298,16 +256,6 @@ class MasterController extends Controller
     }
 
     /**
-     * Every rule this master applies to one row, keyed by column.
-     *
-     * Kept separate from validating so the bulk grid can take the same rules
-     * and re-key them under `rows.3.…`. One definition of what a valid row is,
-     * whether it arrives on its own or with nineteen others.
-     *
-     * Rooms are unique per branch (two properties can both have a "101");
-     * every other master is shared, so its name only has to be unique among
-     * the other shared rows — see branchIdFor().
-     *
      * @return array<string, mixed>
      */
     private function rules(array $config, ?int $ignore, string $master): array
@@ -337,29 +285,12 @@ class MasterController extends Controller
 
         return $rules;
     }
-
-    /**
-     * Which branch a new row belongs to.
-     *
-     * A room is physical — it stands in exactly one building, so it keeps
-     * whichever branch was active when it was added. Every other master
-     * (Tax, Pay Mode, Room Category/Type, Plan Type, Services, Companies,
-     * Vendors, and the rest of the lookup lists) is shared: NULL is what
-     * BaseMaster::scopeForBranch() already reads as "every branch may use
-     * this row", so set up once here, it appears under every branch —
-     * nothing has to be typed in twice for a second property.
-     */
     private function branchIdFor(string $master): ?int
     {
         return $master === 'room' ? Helper::getActiveBranchId() : null;
     }
 
     /**
-     * One row of the bulk grid, turned into columns.
-     *
-     * Built from the config rather than from whatever was posted, so a
-     * hand-crafted form cannot smuggle an extra column into a mass assignment.
-     *
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
      */
@@ -376,8 +307,6 @@ class MasterController extends Controller
 
             $value = $row[$column] ?? null;
 
-            // An empty select or an empty money box is "nothing chosen", which
-            // is a NULL — storing '' would make a foreign key of 0.
             $data[$column] = ($value === '' ? null : $value);
         }
 
@@ -387,13 +316,6 @@ class MasterController extends Controller
     }
 
     /**
-     * Has anybody typed into this row, or is it one of the blank ones?
-     *
-     * Only the fields somebody has to type into count. A select posts its
-     * first option whether or not it was ever looked at, so counting selects
-     * would make every empty row on screen look like something waiting to be
-     * saved.
-     *
      * @param  array<string, mixed>  $row
      */
     private function typedIn(array $row, array $config): bool
@@ -423,7 +345,6 @@ class MasterController extends Controller
         return $names;
     }
 
-    /** Dropdown choices for every `select` field on this master. */
     private function optionsFor(array $config): array
     {
         $options = [];
@@ -448,7 +369,6 @@ class MasterController extends Controller
         return (string) $row->{$column};
     }
 
-    /** Keep one default tax, and keep the room's rent sensible. */
     private function afterSave(string $master, $row): void
     {
         if ($master === 'tax' && $row->is_default) {
@@ -462,13 +382,6 @@ class MasterController extends Controller
             $row->update(['base_rent' => $row->type?->base_rent ?? 0]);
         }
     }
-
-    /**
-     * Is anything pointing at this row? Returns the reason, or null.
-     *
-     * Deleting a room type that live bookings reference would leave those
-     * bookings describing a room type that no longer exists, so we stop it.
-     */
     private function inUseBy(string $master, $row): ?string
     {
         $guards = [

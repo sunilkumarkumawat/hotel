@@ -142,9 +142,18 @@
                                   :selected="old('title', $reservation->title)" />
                     </x-field>
 
-                    <x-field label="First Name" name="first_name" required>
-                        <x-input name="first_name" :value="old('first_name', $reservation->first_name)" placeholder="Aarav" />
-                    </x-field>
+                    {{-- Typing a name or number a second guest already has on
+                         file drops a small "Returning guest" list right here
+                         — pick one and applyGuest() in reservation.js fills
+                         the rest of this card, the same as Customer Search
+                         above does. --}}
+                    <div class="nv-typeahead" data-typeahead>
+                        <x-field label="First Name" name="first_name" required>
+                            <x-input name="first_name" :value="old('first_name', $reservation->first_name)"
+                                     placeholder="Aarav" autocomplete="off" />
+                        </x-field>
+                        <div class="nv-typeahead-results" data-typeahead-results hidden></div>
+                    </div>
 
                     <x-field label="Last Name" name="last_name">
                         <x-input name="last_name" :value="old('last_name', $reservation->last_name)" placeholder="Mehta" />
@@ -155,9 +164,13 @@
                                   :selected="old('reservation_type', $reservation->reservation_type)" />
                     </x-field>
 
-                    <x-field label="Mobile No" name="mobile" required>
-                        <x-input name="mobile" :value="old('mobile', $reservation->mobile)" placeholder="98765 43210" />
-                    </x-field>
+                    <div class="nv-typeahead" data-typeahead>
+                        <x-field label="Mobile No" name="mobile" required>
+                            <x-input name="mobile" :value="old('mobile', $reservation->mobile)"
+                                     placeholder="98765 43210" autocomplete="off" />
+                        </x-field>
+                        <div class="nv-typeahead-results" data-typeahead-results hidden></div>
+                    </div>
 
                     <x-field label="Mobile No. 2" name="mobile2">
                         <x-input name="mobile2" :value="old('mobile2', $reservation->mobile2)" />

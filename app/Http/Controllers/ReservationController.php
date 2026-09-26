@@ -36,20 +36,42 @@ use Illuminate\View\View;
 
 class ReservationController extends Controller
 {
-    /**
-     * GET reservation/new-reservation
-     *
-     * The Status View links here with ?date=&category=, so clicking a free
-     * night lands on the form with that night and category already chosen.
-     */
+
     public function create(Request $request): View
     {
-        $data = $this->formData(new Reservation([
+        $attributes = [
             'reservation_date' => now()->toDateString(),
             'reservation_type' => 'confirm',
             'title' => 'Mr.',
             'country_id' => $this->defaultCountryId(),
-        ]));
+        ];
+
+        if ($request->integer('guest')) {
+            $guest = Guest::query()->forBranch()->find($request->integer('guest'));
+
+            if ($guest) {
+                $attributes = array_merge($attributes, [
+                    'guest_id' => $guest->id,
+                    'title' => $guest->title ?: $attributes['title'],
+                    'first_name' => $guest->first_name,
+                    'last_name' => $guest->last_name,
+                    'email' => $guest->email,
+                    'email2' => $guest->email2,
+                    'mobile' => $guest->mobile,
+                    'mobile2' => $guest->mobile2,
+                    'address' => $guest->address,
+                    'dob' => $guest->dob?->format('Y-m-d'),
+                    'gender' => $guest->gender,
+                    'country_id' => $guest->country_id ?: $attributes['country_id'],
+                    'state_id' => $guest->state_id,
+                    'city_id' => $guest->city_id,
+                    'zip_code' => $guest->zip_code,
+                    'company_id' => $guest->company_id,
+                ]);
+            }
+        }
+
+        $data = $this->formData(new Reservation($attributes));
 
         $arrival = rescue(
             fn () => Carbon::parse($request->string('date')->toString() ?: 'today')->toDateString(),
@@ -65,8 +87,6 @@ class ReservationController extends Controller
             false
         );
 
-        // A room chosen on the tape chart carries its category across too, so
-        // the Room Type list is already filtered when the form opens.
         $room = $request->integer('room')
             ? Room::query()->forBranch()->find($request->integer('room'))
             : null;
@@ -81,7 +101,6 @@ class ReservationController extends Controller
         return view('reservation.form', $data);
     }
 
-    /** POST reservation/new-reservation */
     public function store(Request $request): RedirectResponse
     {
         $data = $this->validated($request);
@@ -104,11 +123,6 @@ class ReservationController extends Controller
             return $reservation;
         });
 
-        /*
-         * The guest's own copy, on their phone. Sent after the transaction has
-         * committed, never inside it: a gateway that hangs for ten seconds
-         * would otherwise hold a database lock open for ten seconds.
-         */
         $stay = $reservation->rooms()->with(['type', 'plan', 'room'])->get();
         $firstStay = $stay->first();
         $nights = ($firstStay && $stay->isNotEmpty())
@@ -168,7 +182,6 @@ class ReservationController extends Controller
             ->with('status', "Reservation {$reservation->reservation_no} has been saved.");
     }
 
-    /** GET reservation/booking-details */
     public function index(Request $request): View
     {
         $filters = [
@@ -180,8 +193,6 @@ class ReservationController extends Controller
 
         $reservations = Reservation::query()
             ->where('branch_id', Helper::getActiveBranchId())
-            // rooms.checkIns feeds the Check-in column: a booking can only be
-            // checked in while it still has rooms nobody has arrived for.
             ->with(['rooms.type', 'rooms.checkIns', 'company', 'bookedBy'])
             ->search($filters['q'])
             ->when($filters['status'], fn ($q, $s) => $q->where('status', $s))
@@ -205,7 +216,6 @@ class ReservationController extends Controller
         ]);
     }
 
-    /** GET reservation/{reservation} */
     public function show(Reservation $reservation): View
     {
         $this->guardBranch($reservation);
@@ -220,7 +230,6 @@ class ReservationController extends Controller
         return view('reservation.show', compact('reservation'));
     }
 
-    /** GET reservation/{reservation}/edit */
     public function edit(Reservation $reservation): View
     {
         $this->guardBranch($reservation);
@@ -232,7 +241,6 @@ class ReservationController extends Controller
         return view('reservation.form', $this->formData($reservation));
     }
 
-    /** PUT reservation/{reservation} */
     public function update(Request $request, Reservation $reservation): RedirectResponse
     {
         $this->guardBranch($reservation);
@@ -246,14 +254,6 @@ class ReservationController extends Controller
 
             $reservation->update($this->header($data, $branchId) + ['guest_id' => $guest?->id]);
 
-            /*
-             * A room already allotted from the Reservation Calendar (room_id
-             * set, nobody arrived yet — isEditable() only rules out a guest
-             * who has actually checked in) must not vanish just because the
-             * clerk fixed a phone number. The grid below is a full delete and
-             * recreate, so the allotment is snapshotted here and matched back
-             * onto the new rows afterwards.
-             */
             $previousRooms = $reservation->rooms()->orderBy('id')->get()->values();
 
             $reservation->rooms()->delete();
@@ -272,7 +272,6 @@ class ReservationController extends Controller
                 . ($dropped ? " {$dropped} room(s) need to be re-allotted from the Reservation Calendar." : ''));
     }
 
-    /** POST reservation/{reservation}/cancel */
     public function cancel(Request $request, Reservation $reservation): RedirectResponse
     {
         $this->guardBranch($reservation);
@@ -283,9 +282,6 @@ class ReservationController extends Controller
             return back()->with('error', 'This reservation is already cancelled.');
         }
 
-        // Status is not the whole story: a booking with a second room still to
-        // arrive stays "confirmed" while somebody is already in the first one,
-        // and cancelling would hand their room back to the sale pool.
         if (in_array($reservation->status, ['checked_in', 'checked_out'], true) || $reservation->hasArrivals()) {
             return back()->with('error', 'Somebody on this booking has already checked in — cancel from Front Office instead.');
         }
@@ -296,7 +292,6 @@ class ReservationController extends Controller
             'cancel_reason' => $request->string('cancel_reason'),
         ]);
 
-        // The rooms go back into the pool the moment the booking is cancelled.
         $reservation->rooms()->update(['room_id' => null, 'room_no' => null]);
 
         GuestMessage::send('guest.booking-cancelled', $reservation->mobile, [
@@ -315,7 +310,6 @@ class ReservationController extends Controller
         return back()->with('status', "Reservation {$reservation->reservation_no} has been cancelled.");
     }
 
-    /** GET reservation/cancel-list */
     public function cancelled(Request $request): View
     {
         $term = $request->string('q')->toString();
@@ -331,7 +325,6 @@ class ReservationController extends Controller
         return view('reservation.cancelled', compact('reservations', 'term'));
     }
 
-    /** POST reservation/{reservation}/deposit */
     public function deposit(Request $request, Reservation $reservation): RedirectResponse
     {
         $this->guardBranch($reservation);
@@ -359,8 +352,6 @@ class ReservationController extends Controller
             $reservation->refreshAdvancePaid();
         });
 
-        // A refund is not good news to announce as one, so only money coming
-        // in earns the guest a message.
         if ($data['type'] === 'deposit') {
             GuestMessage::send('guest.advance', $reservation->mobile, [
                 'guest' => $reservation->guest_name,
@@ -379,13 +370,6 @@ class ReservationController extends Controller
         return back()->with('status', ucfirst($data['type']) . ' of ₹' . number_format($data['amount'], 2) . ' recorded.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | AJAX helpers used by the form
-    |--------------------------------------------------------------------------
-    */
-
-    /** Customer Search — find a returning guest by name, mobile or email. */
     public function searchGuests(Request $request): JsonResponse
     {
         $guests = Guest::query()
@@ -416,20 +400,6 @@ class ReservationController extends Controller
         ]));
     }
 
-    /**
-     * Rooms free for these dates, in this category / type.
-     *
-     * Two numbers come back, and they answer two different questions:
-     *
-     *   `available` — how many rooms the current filters leave free. The
-     *                 "Avl : n" chip at the top of the rooms card.
-     *   `by_type`   — how many of EACH type are free, ignoring the type that
-     *                 happens to be selected. That is what lets the Room Type
-     *                 dropdown say "Deluxe Double — 4 free" on every line, so a
-     *                 clerk booking a family of five can see at a glance which
-     *                 type can actually take them rather than picking one and
-     *                 finding out on save.
-     */
     public function availability(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -439,7 +409,6 @@ class ReservationController extends Controller
             'room_type_id' => 'nullable|integer',
         ]);
 
-        // Every free room in the category, before the type filter narrows it.
         $free = Room::query()
             ->forBranch()
             ->availableBetween($data['arrival_date'], $data['checkout_date'])
@@ -455,7 +424,6 @@ class ReservationController extends Controller
         return response()->json([
             'available' => $rooms->count(),
             'nights' => Money::nights($data['arrival_date'], $data['checkout_date']),
-            // Keyed by room type id, as a plain object the browser can look up.
             'by_type' => $free->groupBy('room_type_id')
                 ->map(fn ($group) => $group->count())
                 ->all(),
@@ -468,7 +436,6 @@ class ReservationController extends Controller
         ]);
     }
 
-    /** Room types inside a category, with their rents. */
     public function roomTypes(Request $request): JsonResponse
     {
         $types = RoomType::query()
@@ -481,18 +448,11 @@ class ReservationController extends Controller
         return response()->json($types);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Internals
-    |--------------------------------------------------------------------------
-    */
-
     private function guardBranch(Reservation $reservation): void
     {
         abort_unless($reservation->branch_id === Helper::getActiveBranchId(), 404);
     }
 
-    /** Everything the form needs to render. */
     private function formData(Reservation $reservation): array
     {
         return [
@@ -519,11 +479,6 @@ class ReservationController extends Controller
             'states' => $reservation->country_id ? Helper::getStates($reservation->country_id) : collect(),
             'cities' => $reservation->state_id ? Helper::getCities($reservation->state_id) : collect(),
             'taxSlabs' => config('pms.room_tax_slabs', []),
-            /*
-             * The Tax dropdown that sits on every room row and every service
-             * row. It opens on "No Tax" and stays there unless somebody picks
-             * something — nothing on this form attracts tax by itself.
-             */
             'taxChoices' => Tax::options(Helper::getActiveBranchId(), withSlab: true),
             'serviceTaxChoices' => Tax::options(Helper::getActiveBranchId()),
             'defaultTaxChoice' => Tax::defaultChoice(),
@@ -581,32 +536,17 @@ class ReservationController extends Controller
             'remark' => 'nullable|string|max:2000',
             'special_remark' => 'nullable|string|max:2000',
 
-            // At least one room — a reservation with no room is not a booking.
             'rooms' => 'required|array|min:1',
             'rooms.*.arrival_date' => 'required|date',
             'rooms.*.arrival_time' => 'nullable',
-            // `after`, not `after_or_equal`: a stay of zero nights holds no room at
-            // all, so the same room could be checked in twice over the same day.
             'rooms.*.checkout_date' => 'required|date|after:rooms.*.arrival_date',
             'rooms.*.checkout_time' => 'nullable',
             'rooms.*.guest_type' => ['required', Rule::in(array_keys(ReservationRoom::GUEST_TYPES))],
             'rooms.*.room_category_id' => 'nullable|integer',
             'rooms.*.room_type_id' => 'required|integer',
             'rooms.*.plan_type_id' => 'nullable|integer',
-            /*
-             * A row books a NUMBER of rooms of a type — five for a family — and
-             * never a room number. Which five rooms they get is decided when
-             * they arrive, from Front Office; by then the house has moved
-             * anyway, and a booking that named 102 three weeks out was only
-             * ever a wish.
-             */
             'rooms.*.no_of_rooms' => 'required|integer|min:1|max:50',
             'rooms.*.tax_type' => 'required|in:exclusive,inclusive',
-            /*
-             * Tax is a choice, and "No Tax" is what the dropdown opens on. The
-             * rule is built from the live list rather than a hard-coded `in:`,
-             * so a tax added in Masters works on the next request.
-             */
             'rooms.*.tax_choice' => Tax::rule($branchId, withSlab: true),
             'rooms.*.room_rent' => 'required|numeric|min:0',
             'rooms.*.discount' => 'nullable|numeric|min:0',
@@ -673,13 +613,6 @@ class ReservationController extends Controller
             'special_remark' => $data['special_remark'] ?? null,
         ];
     }
-
-    /**
-     * Keep the guest book up to date.
-     *
-     * A returning guest picked through Customer Search is updated; a new name
-     * with a new mobile is added, so the second visit can be searched for.
-     */
     private function syncGuest(array $data, int $branchId, ?int $existingId = null): ?Guest
     {
         $fields = [
@@ -701,7 +634,6 @@ class ReservationController extends Controller
             return $guest;
         }
 
-        // Same mobile in the same branch is the same person.
         $match = Guest::query()->forBranch($branchId)->where('mobile', $data['mobile'])->first();
 
         if ($match) {
@@ -719,10 +651,6 @@ class ReservationController extends Controller
         foreach ($rows as $row) {
             $nights = Money::nights($row['arrival_date'], $row['checkout_date']);
 
-            // Resolved once, here, and then stored on the row. The plan master
-            // can be re-priced next month; a booking already taken must not
-            // quietly change what the guest was quoted — and the bill has to be
-            // able to charge the same nightly rate this row was priced at.
             $planCharge = (float) ($plans[$row['plan_type_id'] ?? null] ?? 0);
 
             $figures = Money::roomRow([
@@ -737,8 +665,6 @@ class ReservationController extends Controller
 
             $reservation->rooms()->create([
                 'arrival_date' => $row['arrival_date'],
-                // Both times are nullable, so the key can be missing entirely
-                // when the row does not come from the browser form.
                 'arrival_time' => ($row['arrival_time'] ?? null) ?: config('pms.default_arrival_time'),
                 'checkout_date' => $row['checkout_date'],
                 'checkout_time' => ($row['checkout_time'] ?? null) ?: config('pms.default_checkout_time'),
@@ -746,14 +672,11 @@ class ReservationController extends Controller
                 'room_category_id' => $row['room_category_id'] ?? null,
                 'room_type_id' => $row['room_type_id'],
                 'plan_type_id' => $row['plan_type_id'] ?? null,
-                // Allotted at check-in, not at booking.
                 'room_id' => null,
                 'room_no' => null,
                 'no_of_days' => $nights,
                 'no_of_rooms' => (int) $row['no_of_rooms'],
                 'tax_type' => $row['tax_type'],
-                // Stored, not re-derived: what this booking was quoted at is
-                // what it stays at, whatever Masters → Tax does next month.
                 'tax_choice' => Tax::normalise($row['tax_choice'] ?? Tax::defaultChoice()),
                 'room_rent' => (float) $row['room_rent'],
                 'discount' => (float) ($row['discount'] ?? 0),
@@ -820,7 +743,6 @@ class ReservationController extends Controller
         ]);
     }
 
-    /** Re-add the header totals from the rows that are actually stored. */
     private function recalculate(Reservation $reservation): void
     {
         $reservation->refreshTotals();
@@ -828,17 +750,6 @@ class ReservationController extends Controller
     }
 
     /**
-     * Carry a room allotment across the delete-and-recreate in update().
-     *
-     * Matched back onto the freshly-created rows by position, and only when
-     * the new row in that position is still the same shape — same room type,
-     * same dates, same room count — as the old one. That covers the ordinary
-     * edit, where the room grid itself is untouched and every row lines up
-     * exactly. Anything that does not line up is left unallotted rather than
-     * guessed at: the room the old row held might not even be free for the
-     * new dates, and re-checking that is exactly what the Reservation
-     * Calendar's own clash test is for.
-     *
      * @param  Collection<int, ReservationRoom>  $previousRooms  the rows as they stood before the delete, in order
      * @return int how many allotments could not be carried across
      */

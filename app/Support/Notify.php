@@ -283,11 +283,17 @@ class Notify
 
         $channels = $this->channels($setting, $meta);
 
-        if ($this->wants('mail', $channels)) {
+        /*
+         * Paused at the desk's own request, one channel at a time — see
+         * config/pms.php. The bell above is never skipped by either of
+         * these; only the leg named is, same as if nobody had ticked that
+         * channel for this event.
+         */
+        if ($this->wants('mail', $channels) && ! config('pms.staff_mail_paused')) {
             $this->postMail($notification, $setting, $branchId);
         }
 
-        if ($this->wants('whatsapp', $channels)) {
+        if ($this->wants('whatsapp', $channels) && ! config('pms.staff_whatsapp_paused')) {
             $this->postWhatsApp($notification, $setting, $branchId);
         }
 

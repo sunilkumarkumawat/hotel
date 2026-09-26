@@ -10,34 +10,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * The dashboard's "Ask AI" box.
- *
- * On purpose, this does not touch the database beyond reading the same
- * figures the dashboard already shows — it cannot create a booking, take a
- * payment or change a room's status. Wiring a model up to actually *do*
- * things safely (confirming before it acts, logging what it changed, staying
- * inside the signed-in user's own permissions) is a bigger piece of work than
- * a chat box; this first version answers questions grounded in today's real
- * numbers and points the user at the right screen for anything that needs
- * doing.
- *
- * Four providers are wired up — Anthropic, Gemini, Groq and Hugging Face —
- * and AI_DRIVER in .env picks which one is live; only that one needs a key.
- * `config('services.ai')` documents exactly how to switch each on. Gemini,
- * Groq and Hugging Face are all reached through an OpenAI-compatible chat
- * endpoint, so they share one request/response path (askOpenAiCompatible());
- * only Anthropic's native Messages API shape differs (askAnthropic()).
- */
 class AiAssistantController extends Controller
 {
     public function chat(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'message' => ['required', 'string', 'max:2000'],
-            // Short client-held history so the assistant can follow a
-            // back-and-forth — capped well below what any model's context
-            // needs, since this is a front-desk quick question, not an essay.
             'history' => ['array'],
             'history.*.role' => ['required_with:history', 'in:user,assistant'],
             'history.*.content' => ['required_with:history', 'string', 'max:2000'],
@@ -82,11 +59,6 @@ class AiAssistantController extends Controller
     }
 
     /**
-     * The API key(s) configured for a driver. A single value works as
-     * always; comma-separating more than one (no spaces) — handy when a free
-     * tier hands out a second key — makes the next one an automatic fallback
-     * if the first is invalid, out of quota, or rate-limited.
-     *
      * @return list<string>
      */
     private function keysFor(string $driver): array
@@ -129,11 +101,6 @@ class AiAssistantController extends Controller
             default => throw new \RuntimeException("AI driver [{$driver}] is not implemented yet."),
         };
     }
-
-    /**
-     * Anthropic's native Messages API — the system prompt is its own
-     * top-level field, not a message, and auth is x-api-key, not Bearer.
-     */
     private function askAnthropic(array $keys, string $system, string $message, array $history): string
     {
         $messages = collect($history)
@@ -166,9 +133,6 @@ class AiAssistantController extends Controller
 
             $lastError = 'AI provider returned ' . $response->status() . ': ' . $response->body();
 
-            // Only an auth/quota-shaped failure is worth retrying with the
-            // next key — a bad request or a server error would fail the same
-            // way twice.
             if (! in_array($response->status(), [401, 403, 429], true)) {
                 break;
             }
@@ -176,12 +140,6 @@ class AiAssistantController extends Controller
 
         throw new \RuntimeException($lastError ?? 'AI provider call failed.');
     }
-
-    /**
-     * Gemini, Groq and Hugging Face are each reached through an
-     * OpenAI-compatible /chat/completions endpoint — same request shape,
-     * same response shape, only the URL, key and model differ.
-     */
     private function askOpenAiCompatible(
         string $url,
         array $keys,
@@ -224,13 +182,6 @@ class AiAssistantController extends Controller
 
         throw new \RuntimeException($lastError ?? 'AI provider call failed.');
     }
-
-    /**
-     * Today's real numbers, handed to the model as ground truth so it answers
-     * from what actually happened rather than guessing. Nothing here is
-     * fetched specially for the assistant — it is the same HotelDashboard and
-     * Reports classes the dashboard itself renders from.
-     */
     private function systemPrompt(int $branchId): string
     {
         $dashboard = new HotelDashboard($branchId);
